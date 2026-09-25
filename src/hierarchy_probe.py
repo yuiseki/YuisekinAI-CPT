@@ -42,7 +42,11 @@ DEFAULT_CONFIG = "probe"
 # manifest carries these; they are repeated here so that a score printed from
 # a Parquet alone still says what luck would give.
 CANDIDATES = {"state-in-country": 258, "ward-in-state": 47,
-              "place-in-ward": 23}
+              "place-in-ward": 23,
+              # geo-triples-japan, whose parent layers are the whole country:
+              # 1,740 municipalities and 47 prefectures.
+              "place-in-municipality": 1740,
+              "municipality-in-prefecture": 47}
 
 # Worked examples put in front of each question. Three is enough to show the
 # shape; they come out of the pool so none of them is scored.
@@ -55,6 +59,13 @@ QUESTION = {
     ("ward-in-state", "ja"): "{child}はどの都道府県にありますか。",
     ("place-in-ward", "en"): "Which ward of Tokyo is {child} in?",
     ("place-in-ward", "ja"): "{child}は東京都のどの区にありますか。",
+    ("place-in-municipality", "en"): "Which municipality of Japan is {child} in?",
+    ("place-in-municipality", "ja"): "{child}はどの市区町村にありますか。",
+    # The question this whole line of work started from. Until
+    # geo-triples-japan it was the generalisation probe, asked about places
+    # the corpus did not mention; now a corpus states it.
+    ("municipality-in-prefecture", "en"): "Which prefecture is {child} in?",
+    ("municipality-in-prefecture", "ja"): "{child}はどの都道府県にありますか。",
 }
 
 # Q and A on their own lines, and the last one left open. "Answer with the
