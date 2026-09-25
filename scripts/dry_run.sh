@@ -25,7 +25,7 @@ STEPS="${STEPS:-5}"
 BLOCK="${BLOCK:-256}"
 N_PROBE="${N_PROBE:-20}"
 FORM="${FORM:-ja}"
-PROBE_SET="${PROBE_SET:-../../_research/geo-triples-tokyo23/data/probe.parquet}"
+PROBE_SET="${PROBE_SET:-yuiseki/geo-triples-tokyo23}"
 
 cd "$(dirname "$0")/.."
 mkdir -p "$DATA" "$OUT"

@@ -19,7 +19,7 @@ its own chance. Reporting one figure over both would let the easier level
 carry the harder one.
 
     python3 src/hierarchy_probe.py --model google/gemma-3-270m --n 200 \
-        --set ../../_research/geo-triples-tokyo23/data/probe.parquet
+        --set /path/to/probe.parquet     # or a local copy
     python3 src/hierarchy_probe.py --url http://10.108.45.102:8080 --model-name gvt-llm
 """
 import argparse
@@ -30,8 +30,12 @@ import random
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_SET = os.path.join(HERE, "..", "..", "..", "_research",
-                           "geo-triples-tokyo23", "data", "probe.parquet")
+
+# The published dataset, not a sibling checkout. A path next to this
+# repository works on the machine it was written on and nowhere else, and a
+# rented GPU is the case this has to work on.
+DEFAULT_SET = "yuiseki/geo-triples-tokyo23"
+DEFAULT_CONFIG = "probe"
 
 # How many things the answer could be, per level. Used only to report chance
 # beside the score, because 2% reads as knowledge without it. The dataset's
@@ -63,7 +67,23 @@ def correct(answer, expected):
     return bool(answer) and bare(expected) in answer
 
 
-def load(path, n, lang, seed=3):
+def read_rows(path, config=DEFAULT_CONFIG, revision=None):
+    """The questions, from the Hub or from a file.
+
+    A repository id is anything without a path separator that is not on disk.
+    Reading from the Hub by default is what makes a score name a dataset
+    revision rather than whatever was in a directory beside this one.
+    """
+    if os.path.exists(path):
+        if path.endswith(".parquet"):
+            import pyarrow.parquet as pq
+            return pq.read_table(path).to_pylist()
+        return json.load(open(path, encoding="utf-8"))
+    from datasets import load_dataset
+    return list(load_dataset(path, config, split="train", revision=revision))
+
+
+def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None):
     """n questions from each level, not n from the whole set.
 
     There are 2,896 state questions and 17 ward questions, so a sample drawn
@@ -71,11 +91,7 @@ def load(path, n, lang, seed=3):
     the one closest to the use this was built for, where a fine-tuned model
     writes a well-formed area with an invented parent.
     """
-    if path.endswith(".parquet"):
-        import pyarrow.parquet as pq
-        rows = pq.read_table(path).to_pylist()
-    else:
-        rows = json.load(open(path, encoding="utf-8"))
+    rows = read_rows(path, config, revision)
     for r in rows:
         # The frozen subset names the English columns explicitly. The older
         # JSON called them child and parent; both are read so that a run
@@ -188,7 +204,12 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--url")
     ap.add_argument("--model-name", default="gvt-llm")
-    ap.add_argument("--set", default=DEFAULT_SET)
+    ap.add_argument("--set", default=DEFAULT_SET,
+                    help="a Hugging Face dataset, or a local parquet or json")
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
+    ap.add_argument("--revision", default=None,
+                    help="pin the dataset. Without it the score names the "
+                         "dataset as it is today")
     ap.add_argument("--n", type=int, default=200, help="per language; 0 for all")
     ap.add_argument("--langs", nargs="*", default=["en", "ja"])
     ap.add_argument("--label", default=None)
@@ -200,7 +221,7 @@ def main():
 
     scores = {}
     for lang in a.langs:
-        rows = load(a.set, a.n, lang)
+        rows = load(a.set, a.n, lang, config=a.config, revision=a.revision)
         print(f"{len(rows)} questions in {lang}")
         answers = (ask_endpoint(a.url, a.model_name, rows, lang) if a.url
                    else ask_local(a.model, rows, lang))
