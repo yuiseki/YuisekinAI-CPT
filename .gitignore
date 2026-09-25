@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+
+# Tokenised corpora and checkpoints. Both are reproducible from the code and
+# the published datasets, and both are large.
+*.bin
+*.npy
+runs/
+checkpoints/

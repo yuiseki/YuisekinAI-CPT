@@ -1,0 +1,12 @@
+{
+  "dataset": "yuiseki/wikipedia-geotagged",
+  "config": "20260901.ja",
+  "split": "train",
+  "model": "google/gemma-3-270m-it",
+  "vocab_size": 262145,
+  "eos_token_id": 1,
+  "dtype": "uint32",
+  "tokens": 2589386,
+  "documents_limit": 200,
+  "bytes": 10357544
+}
