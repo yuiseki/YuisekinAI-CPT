@@ -117,6 +117,15 @@ the corpus, the control and the probe all come from the Hub. It is a flattened
 copy of `src/corpus.py`, `src/train.py` and `src/hierarchy_probe.py`, with
 `LIMIT` and `MAX_STEPS` for a smoke run first.
 
+It trains on the Japanese sentences of
+[`yuiseki/geo-triples-japan`](https://huggingface.co/datasets/yuiseki/geo-triples-japan),
+1,848,010 of them, and the defaults come from a run that failed. Training on
+all three forms put four fifths of the budget into N-Triples IRIs: Japanese
+`place-in-ward` fell from 22.5% to 11.7%, the control loss rose by 0.48, and
+every answer collapsed onto one ward, with invented wards like 西武区 among
+them. So the notebook takes one form and a third of the learning rate, and
+`REPLAY` is there for the second run if the control still rises.
+
 It continues `Qwen/Qwen3-0.6B-Base` rather than gemma. `google/gemma-3-270m`
 is a gated repository, and a notebook that needs a licence acceptance and a
 token does not run as it stands. The tokenizers also disagree about this
