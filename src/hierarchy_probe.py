@@ -44,14 +44,31 @@ DEFAULT_CONFIG = "probe"
 CANDIDATES = {"state-in-country": 258, "ward-in-state": 47,
               "place-in-ward": 23}
 
+# Worked examples put in front of each question. Three is enough to show the
+# shape; they come out of the pool so none of them is scored.
+SHOTS = 3
+
 QUESTION = {
-    ("state-in-country", "en"): "Which country is {child} in? Answer with the country only.",
-    ("state-in-country", "ja"): "{child}はどの国にありますか。国名だけ答えてください。",
-    ("ward-in-state", "en"): "Which prefecture is {child} in? Answer with the prefecture only.",
-    ("ward-in-state", "ja"): "{child}はどの都道府県にありますか。都道府県名だけ答えてください。",
-    ("place-in-ward", "en"): "Which ward of Tokyo is {child} in? Answer with the ward only.",
-    ("place-in-ward", "ja"): "{child}は東京都のどの区にありますか。区名だけ答えてください。",
+    ("state-in-country", "en"): "Which country is {child} in?",
+    ("state-in-country", "ja"): "{child}はどの国にありますか。",
+    ("ward-in-state", "en"): "Which prefecture is {child} in?",
+    ("ward-in-state", "ja"): "{child}はどの都道府県にありますか。",
+    ("place-in-ward", "en"): "Which ward of Tokyo is {child} in?",
+    ("place-in-ward", "ja"): "{child}は東京都のどの区にありますか。",
 }
+
+# Q and A on their own lines, and the last one left open. "Answer with the
+# ward only" was in the question before; the format says it better, and a
+# 0.6B base model needs the format. With the examples merely separated by a
+# blank line it produced Chinese trivia, or repeated the first example's
+# question back.
+#
+# The open turn ends at the colon with no space after it. A trailing space is
+# its own token and the first token of the answer then arrives without its
+# leading one: 文京区 came back as 京区, and every answer was wrong for a
+# reason that had nothing to do with the model.
+TURN = "Q: {q}\nA: {a}"
+OPEN = "Q: {q}\nA:"
 
 
 def bare(name):
@@ -64,7 +81,20 @@ def bare(name):
 
 
 def correct(answer, expected):
-    return bool(answer) and bare(expected) in answer
+    """Only the first line counts.
+
+    The model is continuing a list of question-and-answer pairs, so after its
+    answer it writes the next question, and that question names a place. A
+    match anywhere in the completion would score the model for the example it
+    was about to ask itself.
+    """
+    first = (answer or "").strip().split("\n")[0]
+    if first.startswith("Q:") or first.startswith("Q："):
+        # The model wrote the next question instead of an answer, and that
+        # question names a place. Scoring it would credit the model for what
+        # it was about to ask itself.
+        return False
+    return bool(first) and bare(expected) in first
 
 
 def read_rows(path, config=DEFAULT_CONFIG, revision=None):
@@ -83,7 +113,8 @@ def read_rows(path, config=DEFAULT_CONFIG, revision=None):
     return list(load_dataset(path, config, split="train", revision=revision))
 
 
-def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None):
+def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None,
+         shots=SHOTS):
     """n questions from each level, not n from the whole set.
 
     There are 2,896 state questions and 17 ward questions, so a sample drawn
@@ -92,15 +123,20 @@ def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None):
     writes a well-formed area with an invented parent.
     """
     rows = read_rows(path, config, revision)
+    rows = [dict(r) for r in rows]
     for r in rows:
         # The frozen subset names the English columns explicitly. The older
         # JSON called them child and parent; both are read so that a run
         # against a file kept from before the freeze still works.
         r.setdefault("child", r.get("child_en"))
         r.setdefault("parent", r.get("parent_en"))
-    if lang == "ja":
-        rows = [r for r in rows if r.get("child_ja") and r.get("parent_ja")]
+    # Both languages filter, not only Japanese. 3,449 places carry no
+    # name:en, and asking "which ward of Tokyo is None in" scores the model on
+    # a question nobody could answer.
+    rows = [r for r in rows
+            if r.get("child_" + lang) and r.get("parent_" + lang)]
     rows.sort(key=lambda r: (r["level"], r["child_id"]))
+    prefixes, rows = few_shot(rows, lang, shots)
     by_level = collections.defaultdict(list)
     for r in rows:
         by_level[r["level"]].append(r)
@@ -110,12 +146,56 @@ def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None):
         random.Random(seed).shuffle(group)
         out.extend(group[:n] if n else group)
     out.sort(key=lambda r: (r["level"], r["child_id"]))
-    return out
+    return prefixes, out
 
 
-def prompt(row, lang):
+def few_shot(rows, lang, k=SHOTS):
+    """The first k questions of each level, as worked examples.
+
+    A base model has no idea that a question wants an answer. Asked one cold
+    it continues the question, which scores zero for a reason that has nothing
+    to do with what it knows. Three solved examples of the same shape are the
+    ordinary way to ask, and the same three are used before and after
+    training, so what moves is the model rather than the protocol.
+
+    Spread across the level rather than taken from its front, and no two with
+    the same answer. The first three by id at the country level were Aruba and
+    two provinces of Afghanistan, and the model answered アフガニスタン to
+    every question for the rest of the run.
+
+    Removed from the pool, so a demonstration is never also scored.
+    """
+    by_level = collections.defaultdict(list)
+    for r in rows:
+        by_level[r["level"]].append(r)
+    shots, rest = {}, []
+    for level in sorted(by_level):
+        group = sorted(by_level[level], key=lambda r: r["child_id"])
+        order = list(range(len(group)))
+        random.Random(11).shuffle(order)
+        picked, parents = [], set()
+        for i in order:
+            if len(picked) >= k:
+                break
+            if group[i]["parent_id"] in parents:
+                continue
+            parents.add(group[i]["parent_id"])
+            picked.append(i)
+        used = [group[i] for i in sorted(picked)]
+        group = [r for i, r in enumerate(group) if i not in set(picked)]
+        shots[level] = "".join(
+            TURN.format(q=QUESTION[(level, lang)].format(
+                child=u["child_ja"] if lang == "ja" else u["child"]),
+                a=u["parent_ja"] if lang == "ja" else u["parent"]) + "\n\n"
+            for u in used)
+        rest.extend(group)
+    return shots, rest
+
+
+def prompt(row, lang, shots=None):
     child = row["child_ja"] if lang == "ja" else row["child"]
-    return QUESTION[(row["level"], lang)].format(child=child)
+    q = QUESTION[(row["level"], lang)].format(child=child)
+    return (shots or {}).get(row["level"], "") + OPEN.format(q=q)
 
 
 def expected(row, lang):
@@ -140,13 +220,13 @@ def report(label, answers):
         for row, lang, got in wrong:
             child = row["child_ja"] if lang == "ja" else row["child"]
             print(f"    {child} -> {expected(row, lang)} | "
-                  f"{got.strip().replace(chr(10), ' ')[:46]}")
+                  f"{got.strip().split(chr(10))[0][:46]}")
     return {level: {"correct": h, "n": n, "accuracy": h / n,
                     "chance": 1 / CANDIDATES[level]}
             for level, (h, n) in per.items()}
 
 
-def ask_local(model_path, rows, lang, device=None):
+def ask_local(model_path, rows, lang, device=None, shots=None, chat=False):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -154,22 +234,21 @@ def ask_local(model_path, rows, lang, device=None):
     model = AutoModelForCausalLM.from_pretrained(model_path)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
-    # A base model has no chat template, and a model continued from one still
-    # has none after training. Asking for a template that is not there raises;
-    # asking the question as plain text is what a base model can answer at
-    # all, so that is the fallback rather than a failure.
-    templated = bool(getattr(tok, "chat_template", None))
-    if not templated:
-        print("  no chat template; asking as plain text", flush=True)
+    # Asked for, never detected. Qwen3-0.6B-Base ships a chat template
+    # although it is a base model, and wrapping a few-shot block in ChatML
+    # makes it answer by continuing the list of questions: every score was
+    # zero, and none of it was about the model's geography.
+    templated = chat and getattr(tok, "chat_template", None)
+    print(f"  asking as {'chat' if templated else 'plain text'}", flush=True)
     out = []
     for i, row in enumerate(rows):
         text = (tok.apply_chat_template(
-            [{"role": "user", "content": prompt(row, lang)}],
+            [{"role": "user", "content": prompt(row, lang, shots)}],
             tokenize=False, add_generation_prompt=True) if templated
-            else prompt(row, lang) + "\n")
+            else prompt(row, lang, shots))
         ids = tok(text, return_tensors="pt").to(device)
         with torch.no_grad():
-            gen = model.generate(**ids, max_new_tokens=24, do_sample=False,
+            gen = model.generate(**ids, max_new_tokens=16, do_sample=False,
                                  pad_token_id=tok.eos_token_id)
         out.append((row, lang,
                     tok.decode(gen[0][ids["input_ids"].shape[1]:],
@@ -179,7 +258,7 @@ def ask_local(model_path, rows, lang, device=None):
     return out
 
 
-def ask_endpoint(url, model_name, rows, lang, timeout=120.0):
+def ask_endpoint(url, model_name, rows, lang, timeout=120.0, shots=None):
     import httpx
 
     out = []
@@ -187,9 +266,10 @@ def ask_endpoint(url, model_name, rows, lang, timeout=120.0):
         for i, row in enumerate(rows):
             try:
                 r = c.post(f"{url.rstrip('/')}/v1/chat/completions", json={
-                    "model": model_name, "temperature": 0, "max_tokens": 24,
+                    "model": model_name, "temperature": 0, "max_tokens": 16,
                     "messages": [{"role": "user",
-                                  "content": prompt(row, lang) + " /no_think"}]})
+                                  "content": prompt(row, lang, shots)
+                                             + " /no_think"}]})
                 got = r.json()["choices"][0]["message"]["content"]
             except Exception as e:
                 got = f"ERROR {type(e).__name__}"
@@ -210,7 +290,17 @@ def main():
     ap.add_argument("--revision", default=None,
                     help="pin the dataset. Without it the score names the "
                          "dataset as it is today")
-    ap.add_argument("--n", type=int, default=200, help="per language; 0 for all")
+    ap.add_argument("--n", type=int, default=200,
+                    help="per level per language; 0 for all")
+    ap.add_argument("--chat", action="store_true",
+                    help="wrap the question in the tokenizer's chat template. "
+                         "Off by default: this is a completion task, and a "
+                         "base model that ships a template is not a model "
+                         "that was tuned to follow one")
+    ap.add_argument("--shots", type=int, default=SHOTS,
+                    help="worked examples before each question. A base model "
+                         "asked cold continues the question instead of "
+                         "answering it")
     ap.add_argument("--langs", nargs="*", default=["en", "ja"])
     ap.add_argument("--label", default=None)
     ap.add_argument("--out", default=None)
@@ -221,10 +311,13 @@ def main():
 
     scores = {}
     for lang in a.langs:
-        rows = load(a.set, a.n, lang, config=a.config, revision=a.revision)
-        print(f"{len(rows)} questions in {lang}")
-        answers = (ask_endpoint(a.url, a.model_name, rows, lang) if a.url
-                   else ask_local(a.model, rows, lang))
+        shots, rows = load(a.set, a.n, lang, config=a.config,
+                           revision=a.revision, shots=a.shots)
+        print(f"{len(rows)} questions in {lang}, {a.shots} shots each")
+        answers = (ask_endpoint(a.url, a.model_name, rows, lang, shots=shots)
+                   if a.url
+                   else ask_local(a.model, rows, lang, shots=shots,
+                                  chat=a.chat))
         scores[lang] = report(f"{a.label or a.model or a.model_name}  [{lang}]",
                               answers)
     if a.out:

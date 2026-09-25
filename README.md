@@ -79,22 +79,26 @@ reported as the other.
 
 | model | level | en | ja |
 |---|---|---:|---:|
-| Qwen3.6-35B-A3B | `state-in-country` | 76.7% | 43.3% |
-| Qwen3.6-35B-A3B | `ward-in-state` | 100.0% | 94.1% |
-| gemma-3-270m-it | `state-in-country` | 20.8% | 0.8% |
-| gemma-3-270m-it | `ward-in-state` | 23.5% | 0.0% |
+| Qwen3.6-35B-A3B | `place-in-ward` | 37.5% | 45.8% |
+| Qwen3.6-35B-A3B | `state-in-country` | 86.7% | 63.3% |
+| Qwen3-0.6B-Base | `place-in-ward` | 10.0% | 22.5% |
+| Qwen3-0.6B-Base | `state-in-country` | 46.7% | 7.5% |
 
-120 questions per level, chance 0.4% and 2.1%. The ward level is saturated at
-35B and the country level is not, and asking in Japanese costs the 35B 33
-points on the level it has not saturated. The 270M model in Japanese is at
-chance, and its failures have a shape: it repeats the question back, or
-answers that the place is in America.
+120 questions per level with three worked examples in front of each, asked as
+a completion. Chance is 4.3% and 0.4%. `ward-in-state` is left out of the
+table because both models answer all 16 of its questions and every answer is
+東京都.
 
-Measured rather than assumed, and the assumption would have been wrong:
-Japanese runs at 1.40 characters per token under gemma's tokenizer and 0.92
-under OLMo's. Below one character per token means the text is being broken into
-bytes, so OLMo 2 has no Japanese vocabulary to speak of. Its data provenance is
-the best of any open model and it is still the wrong base for this.
+`place-in-ward` is the level with room in it: 37.5% at 35B. The language gap
+reverses between the two levels, which is the `name:en` coverage of
+OpenStreetMap seen from the other side.
+
+The protocol took three attempts and none of the failures were about
+geography. Asked cold, a base model continues the question. Wrapped in the
+chat template that `Qwen3-0.6B-Base` ships with although it is a base model,
+it does the same. And a prompt ending in `A: ` with a trailing space loses the
+first token of the answer, so 文京区 comes back as 京区 and every row is
+wrong. All three read as 0%.
 
 ## What is here
 
@@ -113,8 +117,19 @@ the corpus, the control and the probe all come from the Hub. It is a flattened
 copy of `src/corpus.py`, `src/train.py` and `src/hierarchy_probe.py`, with
 `LIMIT` and `MAX_STEPS` for a smoke run first.
 
-38.7 million tokens under gemma's tokenizer, about 25 minutes of A100 time for
-one pass, 2 to 3 compute units. The generalisation probe is the one thing it
+It continues `Qwen/Qwen3-0.6B-Base` rather than gemma. `google/gemma-3-270m`
+is a gated repository, and a notebook that needs a licence acceptance and a
+token does not run as it stands. The tokenizers also disagree about this
+corpus in Qwen's favour, because four fifths of it is N-Triples:
+
+| | N-Triples | ja | en |
+|---|---:|---:|---:|
+| gemma-3-270m | 2.23 | 1.66 | 4.71 |
+| Qwen3-0.6B | 2.71 | 1.39 | 4.25 |
+
+characters per token. 31 million tokens rather than 39 for the same text,
+against a model twice the size: about half an hour of A100 time for one pass,
+3 to 4 compute units. The generalisation probe is the one thing it
 cannot do by itself, because its answer key is `data/jp_municipalities.json`
 here rather than on the Hub; the last cell takes it as an upload.
 
