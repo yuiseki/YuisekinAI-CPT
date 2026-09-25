@@ -81,6 +81,13 @@ QUESTION = {
 TURN = "Q: {q}\nA: {a}"
 OPEN = "Q: {q}\nA:"
 
+# The other way to ask, and for a model continued on declarative sentences it
+# is the fair one. The corpus says "南伊勢町は三重県に含まれる。" and the
+# question above asks for the same fact in a shape the corpus never uses. A
+# base model trained on the first and asked the second can lose the score
+# without losing the fact, so both are measured and reported apart.
+CLOZE = "{child}は"
+
 
 def bare(name):
     """愛媛県 -> 愛媛, so an answer in either form counts.
@@ -91,7 +98,7 @@ def bare(name):
     return name[:-1] if name and name[-1] in "県府都道" else name
 
 
-def correct(answer, expected):
+def correct(answer, expected, mode="qa"):
     """Only the first line counts.
 
     The model is continuing a list of question-and-answer pairs, so after its
@@ -100,6 +107,11 @@ def correct(answer, expected):
     was about to ask itself.
     """
     first = (answer or "").strip().split("\n")[0]
+    if mode == "cloze":
+        # The model is continuing a sentence, so the answer is somewhere in
+        # the clause rather than on its own. One line still, because the next
+        # sentence it writes will name other places.
+        return bool(first) and bare(expected) in first
     if first.startswith("Q:") or first.startswith("Q："):
         # The model wrote the next question instead of an answer, and that
         # question names a place. Scoring it would credit the model for what
@@ -209,8 +221,14 @@ def few_shot(rows, lang, k=SHOTS):
     return shots, rest
 
 
-def prompt(row, lang, shots=None):
+def prompt(row, lang, shots=None, mode="qa"):
     child = row["child_ja"] if lang == "ja" else row["child"]
+    if mode == "cloze":
+        if lang != "ja":
+            raise SystemExit("the cloze form is written for Japanese only; "
+                             "the corpus's English sentences put the name "
+                             "first and the answer last in a different shape")
+        return CLOZE.format(child=child)
     q = QUESTION[(row["level"], lang)].format(child=child)
     return (shots or {}).get(row["level"], "") + OPEN.format(q=q)
 
@@ -219,11 +237,11 @@ def expected(row, lang):
     return row["parent_ja"] if lang == "ja" else row["parent"]
 
 
-def report(label, answers):
+def report(label, answers, mode="qa"):
     per = collections.defaultdict(lambda: [0, 0])
     wrong = []
     for row, lang, got in answers:
-        ok = correct(got, expected(row, lang))
+        ok = correct(got, expected(row, lang), mode)
         per[row["level"]][1] += 1
         per[row["level"]][0] += ok
         if not ok and len(wrong) < 8:
@@ -243,7 +261,8 @@ def report(label, answers):
             for level, (h, n) in per.items()}
 
 
-def ask_local(model_path, rows, lang, device=None, shots=None, chat=False):
+def ask_local(model_path, rows, lang, device=None, shots=None, chat=False,
+              mode="qa"):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -260,9 +279,9 @@ def ask_local(model_path, rows, lang, device=None, shots=None, chat=False):
     out = []
     for i, row in enumerate(rows):
         text = (tok.apply_chat_template(
-            [{"role": "user", "content": prompt(row, lang, shots)}],
+            [{"role": "user", "content": prompt(row, lang, shots, mode)}],
             tokenize=False, add_generation_prompt=True) if templated
-            else prompt(row, lang, shots))
+            else prompt(row, lang, shots, mode))
         ids = tok(text, return_tensors="pt").to(device)
         with torch.no_grad():
             gen = model.generate(**ids, max_new_tokens=16, do_sample=False,
@@ -313,6 +332,12 @@ def main():
                     help="drop questions whose subject names the answer. The "
                          "dataset marks them; this is how to score without "
                          "them")
+    ap.add_argument("--mode", default="qa", choices=["qa", "cloze"],
+                    help="qa asks a question with worked examples; cloze "
+                         "opens the corpus's own sentence and lets the model "
+                         "finish it. A model continued on declarative "
+                         "sentences can lose the first without losing the "
+                         "fact")
     ap.add_argument("--chat", action="store_true",
                     help="wrap the question in the tokenizer's chat template. "
                          "Off by default: this is a completion task, and a "
@@ -339,9 +364,10 @@ def main():
         answers = (ask_endpoint(a.url, a.model_name, rows, lang, shots=shots)
                    if a.url
                    else ask_local(a.model, rows, lang, shots=shots,
-                                  chat=a.chat))
-        scores[lang] = report(f"{a.label or a.model or a.model_name}  [{lang}]",
-                              answers)
+                                  chat=a.chat, mode=a.mode))
+        scores[lang] = report(
+            f"{a.label or a.model or a.model_name}  [{lang} {a.mode}]",
+            answers, a.mode)
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump({"model": a.label or a.model or a.model_name, "scores": scores},
