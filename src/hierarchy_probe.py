@@ -37,18 +37,25 @@ DEFAULT_SET = os.path.join(HERE, "..", "..", "..", "_research",
 # beside the score, because 2% reads as knowledge without it. The dataset's
 # manifest carries these; they are repeated here so that a score printed from
 # a Parquet alone still says what luck would give.
-CANDIDATES = {"state-in-country": 258, "ward-in-state": 47}
+CANDIDATES = {"state-in-country": 258, "ward-in-state": 47,
+              "place-in-ward": 23}
 
 QUESTION = {
     ("state-in-country", "en"): "Which country is {child} in? Answer with the country only.",
     ("state-in-country", "ja"): "{child}はどの国にありますか。国名だけ答えてください。",
     ("ward-in-state", "en"): "Which prefecture is {child} in? Answer with the prefecture only.",
     ("ward-in-state", "ja"): "{child}はどの都道府県にありますか。都道府県名だけ答えてください。",
+    ("place-in-ward", "en"): "Which ward of Tokyo is {child} in? Answer with the ward only.",
+    ("place-in-ward", "ja"): "{child}は東京都のどの区にありますか。区名だけ答えてください。",
 }
 
 
 def bare(name):
-    """愛媛県 -> 愛媛, so an answer in either form counts."""
+    """愛媛県 -> 愛媛, so an answer in either form counts.
+
+    Not 区: 港区 and 港 are not interchangeable the way 愛媛県 and 愛媛 are,
+    and dropping it would let 北区 match 北千住.
+    """
     return name[:-1] if name and name[-1] in "県府都道" else name
 
 
