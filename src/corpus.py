@@ -13,6 +13,10 @@ is a contiguous array anyway.
     python3 src/corpus.py --dataset yuiseki/wikipedia-geotagged \
         --config 20260901.ja --model google/gemma-3-270m-it \
         --out data/ja.bin --limit 200          # dry run
+
+    python3 src/corpus.py --dataset yuiseki/geo-triples-tokyo23 \
+        --config cpt --where form=ja --model google/gemma-3-270m \
+        --out data/geo-ja.bin
 """
 import argparse
 import json
@@ -48,17 +52,45 @@ def write(tokens_iter, out, dtype=DTYPE, flush_every=1_000_000):
     return total
 
 
-def documents(dataset, config, split, text_field, limit):
-    """Stream the text of a published dataset, without downloading all of it."""
+def parse_where(pairs):
+    """["form=ja"] -> {"form": "ja"}, so a subset can be selected by column.
+
+    geo-triples-tokyo23 keeps its three forms in one table with a form column
+    rather than in three subsets, so that they can be weighted or one of them
+    dropped without rebuilding. Selecting one of them is this flag.
+    """
+    out = {}
+    for p in pairs or ():
+        if "=" not in p:
+            raise SystemExit(f"--where wants column=value, not {p!r}")
+        col, value = p.split("=", 1)
+        out[col] = value
+    return out
+
+
+def documents(dataset, config, split, text_field, limit, where=None):
+    """Stream the text of a published dataset, without downloading all of it.
+
+    The limit counts documents kept, not documents seen. Counting rows read
+    would make --where and --limit interact: a filter that matches the last
+    third of the table would return nothing at all for a small limit, and it
+    would look like the filter was wrong rather than the counting.
+    """
     from datasets import load_dataset
 
+    where = where or {}
     ds = load_dataset(dataset, config, split=split, streaming=True)
-    for i, row in enumerate(ds):
-        if limit and i >= limit:
-            return
+    kept = 0
+    for row in ds:
+        if any(str(row.get(k)) != v for k, v in where.items()):
+            continue
         text = row.get(text_field)
-        if text:
-            yield text
+        if not text:
+            continue
+        yield text
+        kept += 1
+        if limit and kept >= limit:
+            return
 
 
 def encode(docs, tok, eos_id, batch=BATCH):
@@ -88,8 +120,12 @@ def main():
     ap.add_argument("--text-field", default="text")
     ap.add_argument("--model", required=True, help="whose tokenizer to use")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--where", action="append", default=None,
+                    metavar="COLUMN=VALUE",
+                    help="keep only rows whose column has this value. "
+                         "Repeatable; all of them must match")
     ap.add_argument("--limit", type=int, default=0,
-                    help="stop after this many documents; 0 means all")
+                    help="stop after this many documents kept; 0 means all")
     a = ap.parse_args()
 
     from transformers import AutoTokenizer
@@ -100,7 +136,9 @@ def main():
                          "documents with")
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    docs = documents(a.dataset, a.config, a.split, a.text_field, a.limit)
+    where = parse_where(a.where)
+    docs = documents(a.dataset, a.config, a.split, a.text_field, a.limit,
+                     where)
     n = write(encode(docs, tok, eos), a.out)
 
     meta = {
@@ -108,6 +146,10 @@ def main():
         "model": a.model, "vocab_size": len(tok), "eos_token_id": eos,
         "dtype": np.dtype(DTYPE).name, "tokens": n,
         "documents_limit": a.limit or None,
+        # In the manifest because a .bin file is otherwise anonymous: two
+        # corpora built from one subset with different filters are the same
+        # size and shape and cannot be told apart by looking.
+        "where": where or None,
         "bytes": os.path.getsize(a.out),
     }
     with open(manifest_path(a.out), "w", encoding="utf-8") as f:

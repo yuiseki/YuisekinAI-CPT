@@ -16,7 +16,7 @@ def test_the_holdout_is_the_tail_and_never_empty():
     assert train.split_holdout(1_000_000, 0.005, 1024) == 995_000
     # A corpus barely longer than one block still leaves something to evaluate.
     cut = train.split_holdout(3000, 0.005, 1024)
-    assert cut == 1975 and 3000 - cut > 1024
+    assert cut == 1974 and 3000 - cut > 1024 + 1
 
 
 def test_the_holdout_is_not_sampled_at_random():
@@ -91,3 +91,18 @@ def test_evaluation_has_its_own_batch_size():
                encoding="utf-8").read()
     assert "--eval-batch-size" in src
     assert "a.eval_batch_size, a.block_size" in src
+
+
+def test_a_short_corpus_still_leaves_a_window_to_evaluate_on():
+    """The holdout floor being one token short of usable.
+
+    A tail of exactly block + 1 holds one window and no choice of where to
+    start it, and batch() raises rather than returning that one window. The
+    run then dies after the model has loaded, which is late and looks like a
+    training failure rather than an arithmetic one.
+    """
+    block = 256
+    for n in (9_682, block + 3, 100_000):
+        cut = train.split_holdout(n, 0.005, block)
+        # What batch() needs: a range of starts with at least one in it.
+        assert n - block - 1 > cut, n

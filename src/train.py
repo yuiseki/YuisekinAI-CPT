@@ -42,8 +42,14 @@ def split_holdout(n, holdout, block):
     A tail rather than a random sample, because windows overlap: a randomly
     chosen evaluation window shares tokens with the training windows either
     side of it, and reports a loss the model has already seen.
+
+    The floor is block + 2, not block + 1. A window of block tokens starting
+    at the first position of a tail of block + 1 is the whole tail, and
+    sampling a start needs a range with something in it, so a tail of exactly
+    block + 1 leaves no window to evaluate on. A short corpus hits this and
+    the run dies after the model is loaded.
     """
-    tail = max(block + 1, int(n * holdout))
+    tail = max(block + 2, int(n * holdout))
     return max(0, n - tail)
 
 

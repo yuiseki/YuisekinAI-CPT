@@ -73,3 +73,33 @@ def test_the_builder_leaves_without_finalising_the_interpreter():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "corpus.py"),
                encoding="utf-8").read()
     assert "os._exit(0)" in src
+
+
+def test_where_selects_rows_by_column():
+    assert corpus.parse_where(["form=ja"]) == {"form": "ja"}
+    assert corpus.parse_where(["a=1", "b=2"]) == {"a": "1", "b": "2"}
+    assert corpus.parse_where(None) == {}
+
+
+def test_where_without_a_value_is_refused():
+    """--where form ja, which would otherwise select nothing and say nothing."""
+    import pytest
+    with pytest.raises(SystemExit):
+        corpus.parse_where(["form"])
+
+
+def test_the_limit_counts_what_is_kept_not_what_is_read(monkeypatch):
+    """A filter matching the tail of a table returning an empty corpus.
+
+    The rows of geo-triples-tokyo23's cpt table are sorted by form, so every
+    ja row sits after 126,208 ntriples rows. Counting rows read rather than
+    rows kept would make a small --limit produce nothing and look like a
+    broken filter.
+    """
+    rows = ([{"text": f"n{i}", "form": "ntriples"} for i in range(5)] +
+            [{"text": f"j{i}", "form": "ja"} for i in range(5)])
+    monkeypatch.setitem(sys.modules, "datasets",
+                        type(sys)("datasets"))
+    sys.modules["datasets"].load_dataset = lambda *a, **k: rows
+    got = list(corpus.documents("d", "cpt", "train", "text", 2, {"form": "ja"}))
+    assert got == ["j0", "j1"]

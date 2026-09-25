@@ -1,13 +1,15 @@
 {
-  "dataset": "yuiseki/wikipedia-geotagged",
-  "config": "20260901.en",
+  "dataset": "yuiseki/geo-triples-tokyo23",
+  "config": "cpt",
   "split": "train",
   "model": "google/gemma-3-270m-it",
   "vocab_size": 262145,
   "eos_token_id": 1,
   "dtype": "uint32",
-  "tokens": 30769472,
+  "tokens": 97472,
   "documents_limit": 4000,
-  "where": null,
-  "bytes": 123077888
+  "where": {
+    "form": "ja"
+  },
+  "bytes": 389888
 }

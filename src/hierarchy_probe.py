@@ -131,11 +131,19 @@ def ask_local(model_path, rows, lang, device=None):
     model = AutoModelForCausalLM.from_pretrained(model_path)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).eval()
+    # A base model has no chat template, and a model continued from one still
+    # has none after training. Asking for a template that is not there raises;
+    # asking the question as plain text is what a base model can answer at
+    # all, so that is the fallback rather than a failure.
+    templated = bool(getattr(tok, "chat_template", None))
+    if not templated:
+        print("  no chat template; asking as plain text", flush=True)
     out = []
     for i, row in enumerate(rows):
-        text = tok.apply_chat_template(
+        text = (tok.apply_chat_template(
             [{"role": "user", "content": prompt(row, lang)}],
-            tokenize=False, add_generation_prompt=True)
+            tokenize=False, add_generation_prompt=True) if templated
+            else prompt(row, lang) + "\n")
         ids = tok(text, return_tensors="pt").to(device)
         with torch.no_grad():
             gen = model.generate(**ids, max_new_tokens=24, do_sample=False,

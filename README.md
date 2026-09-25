@@ -30,13 +30,65 @@ times over.
 
 ## The corpora
 
+The corpus being learnt is the `cpt` subset of
+[`yuiseki/geo-triples-tokyo23`](https://huggingface.co/datasets/yuiseki/geo-triples-tokyo23),
+which states 126,208 true spatial facts three times over: as an N-Triples
+line, as an English sentence and as a Japanese one. Nothing in it was written
+by a model, and every statement is traceable to a DE-9IM matrix computed from
+frozen geometry.
+
+| `form` | rows | characters |
+|---|---:|---:|
+| `ntriples` | 126,208 | 37,696,172 |
+| `en` | 89,500 | 6,567,573 |
+| `ja` | 89,500 | 4,030,260 |
+
+The three sit in one table with a `form` column, so `--where form=ja` picks
+one and the weighting is a choice made at corpus time rather than at build
+time.
+
+The control is `20260901.en` of
+[`yuiseki/wikipedia-geotagged`](https://huggingface.co/datasets/yuiseki/wikipedia-geotagged),
+4,331,110,851 characters, never trained on. It is there to make forgetting
+visible at every checkpoint rather than at the end.
+
 | subset | characters | tokens (gemma) | tokens (OLMo) |
 |---|---|---|---|
 | `20260901.ja` | 435,046,691 | 311 M | 473 M |
 | `20260901.en` | 4,331,110,851 | 1,062 M | 1,017 M |
 
-From [`yuiseki/wikipedia-geotagged`](https://huggingface.co/datasets/yuiseki/wikipedia-geotagged).
-Japanese is the corpus being learnt; English is the control, never trained on.
+Japanese Wikipedia is measured here because it was the first corpus tried and
+the tokenizer comparison below still rests on it.
+
+## The two probes, which measure opposite things
+
+| | asks about | in the corpus | measures |
+|---|---|---|---|
+| `src/hierarchy_probe.py` | 2,913 states and wards | yes, every one | recall |
+| `src/probe.py` | 1,134 Japanese municipalities | 1 of them | generalisation |
+
+The first is the frozen `probe` subset of the same dataset, pinned by the same
+digest, so a score names a dataset revision. Its answers are all stated in the
+training corpus by construction, which is why it is labelled recall and not
+anything stronger.
+
+The second is the original question and the corpus says almost nothing about
+it. A rise in the first with none in the second is the expected result rather
+than a disappointment, and both are run before and after so that one cannot be
+reported as the other.
+
+| model | level | en | ja |
+|---|---|---:|---:|
+| Qwen3.6-35B-A3B | `state-in-country` | 76.7% | 43.3% |
+| Qwen3.6-35B-A3B | `ward-in-state` | 100.0% | 94.1% |
+| gemma-3-270m-it | `state-in-country` | 20.8% | 0.8% |
+| gemma-3-270m-it | `ward-in-state` | 23.5% | 0.0% |
+
+120 questions per level, chance 0.4% and 2.1%. The ward level is saturated at
+35B and the country level is not, and asking in Japanese costs the 35B 33
+points on the level it has not saturated. The 270M model in Japanese is at
+chance, and its failures have a shape: it repeats the question back, or
+answers that the place is in America.
 
 Measured rather than assumed, and the assumption would have been wrong:
 Japanese runs at 1.40 characters per token under gemma's tokenizer and 0.92
@@ -49,6 +101,7 @@ the best of any open model and it is still the wrong base for this.
     src/corpus.py     a published dataset -> one flat array of token ids
     src/train.py      continued pretraining, with a control corpus
     src/probe.py      which prefecture is this municipality in
+    src/hierarchy_probe.py       which parent does this place have
     scripts/build_probe_set.py   rebuilds the answer key from the gazetteer
     scripts/dry_run.sh           every stage, small enough to finish here
 
@@ -56,7 +109,7 @@ the best of any open model and it is still the wrong base for this.
 
     bash scripts/dry_run.sh
 
-200 documents, five steps, on whatever hardware is present. It teaches the
+4,000 statements, five steps, on whatever hardware is present. It teaches the
 model nothing; it shows that each stage reads its input and writes its output,
 and it costs no compute units.
 
