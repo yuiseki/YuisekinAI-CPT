@@ -114,10 +114,22 @@ def main():
                     help="stop early; 0 means run the epochs")
     ap.add_argument("--eval-every", type=int, default=200)
     ap.add_argument("--eval-iters", type=int, default=20)
+    ap.add_argument("--eval-batch-size", type=int, default=1,
+                    help="evaluation runs in eval mode, where the fused loss "
+                         "does not apply and the logits are materialised "
+                         "again. Kept separate so that a training batch "
+                         "--liger makes affordable does not blow up at the "
+                         "first checkpoint")
     ap.add_argument("--holdout", type=float, default=0.005)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--device", default=None)
     ap.add_argument("--dtype", default=None, choices=[None, "bf16", "fp16", "fp32"])
+    ap.add_argument("--liger", action="store_true",
+                    help="fuse the final projection into the loss, so the "
+                         "logits are never materialised. For a model with a "
+                         "262,144-entry vocabulary that is where the memory "
+                         "goes: 8 x 4096 costs 2.75 GB with it and would need "
+                         "over 50 without")
     a = ap.parse_args()
 
     import torch
@@ -146,6 +158,12 @@ def main():
           f"({a.batch_size} x {a.grad_accum} x {a.block_size})", flush=True)
 
     model = AutoModelForCausalLM.from_pretrained(a.model, dtype=dtype)
+    if a.liger:
+        from liger_kernel.transformers import _apply_liger_kernel_to_instance
+        _apply_liger_kernel_to_instance(model=model)
+        print("liger: the loss is fused in training mode, so the logits are "
+              "not materialised. Evaluation runs in eval mode, where they are, "
+              f"which is why it uses a batch of {a.eval_batch_size}.")
     model.to(device)
     model.gradient_checkpointing_enable()
     model.train()
@@ -157,16 +175,21 @@ def main():
     log_path = os.path.join(a.out, "log.jsonl")
     rng = np.random.default_rng(a.seed)
     began = time.time()
+    # Triton compiles its kernels on first use, which on a short run is most
+    # of the run. A rate measured from step one said 395 tokens/s for a
+    # configuration that settles at several thousand.
+    WARMUP = 3
+    steady_from = None
 
     def checkpoint(step):
         row = {"step": step,
                "held_out": evaluate(model, tokens, cut, len(tokens),
-                                    a.batch_size, a.block_size, a.eval_iters,
-                                    device, a.seed)}
+                                    a.eval_batch_size, a.block_size,
+                                    a.eval_iters, device, a.seed)}
         if control is not None:
             row["control"] = evaluate(model, control, 0, len(control),
-                                      a.batch_size, a.block_size, a.eval_iters,
-                                      device, a.seed)
+                                      a.eval_batch_size, a.block_size,
+                                      a.eval_iters, device, a.seed)
         row["elapsed_s"] = round(time.time() - began, 1)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
@@ -174,6 +197,10 @@ def main():
                          if k in ("held_out", "control"))
         print(f"  step {step:>6} {parts}", flush=True)
         return row
+
+    def peak_gb():
+        return (torch.cuda.max_memory_allocated() / 1024 ** 3
+                if device == "cuda" else 0.0)
 
     first = checkpoint(0)
     vocab = getattr(model.config, "vocab_size", None)
@@ -194,8 +221,31 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         sched.step()
+        if step == WARMUP:
+            if device == "cuda":
+                torch.cuda.synchronize()
+            steady_from = time.time()
+        if step == 1 and device == "cuda":
+            # After one full step the optimizer states exist and the largest
+            # activation has been held, so this is the number to compare
+            # against src/budget.py.
+            print(f"  peak VRAM {peak_gb():.2f} GB after the first step "
+                  f"(batch {a.batch_size} x block {a.block_size})", flush=True)
         if step % a.eval_every == 0 or step == steps:
             checkpoint(step)
+
+    # Before the saves and the final evaluation, or their cost is reported as
+    # the training rate: writing the checkpoint put 62 seconds into a 20-second
+    # measurement.
+    if device == "cuda":
+        torch.cuda.synchronize()
+    finished = time.time()
+    tokens_seen = steps * per_step
+    print(f"{tokens_seen:,} tokens in {finished - began:.0f}s "
+          f"= {tokens_seen / max(1e-9, finished - began):,.0f} tokens/s overall")
+    if steady_from and steps > WARMUP:
+        steady = (steps - WARMUP) * per_step / max(1e-9, finished - steady_from)
+        print(f"  after {WARMUP} warmup steps: {steady:,.0f} tokens/s", flush=True)
 
     last = checkpoint(steps) if steps % a.eval_every else None
     model.save_pretrained(a.out)
@@ -205,6 +255,8 @@ def main():
 
     # Forgetting is the thing to shout about, so say it rather than leave it
     # in the log for somebody to notice.
+    if device == "cuda":
+        print(f"peak VRAM {peak_gb():.2f} GB")
     rows = [json.loads(l) for l in open(log_path, encoding="utf-8")]
     if control is not None and len(rows) > 1:
         rise = rows[-1]["control"] - rows[0]["control"]

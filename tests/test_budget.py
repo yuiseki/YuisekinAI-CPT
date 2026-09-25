@@ -18,18 +18,22 @@ def test_the_parameter_count_matches_the_name():
     assert p["embedding"] / p["total"] > 0.6
 
 
+FIXED = ("parameters", "gradients", "optimizer", "master weights")
+
+
+def fixed_cost(b):
+    return sum(b.get(k, 0) for k in FIXED)
+
+
 def test_the_logits_dominate_at_a_reasonable_batch():
     b = budget.budget(GEMMA, batch=8, block=1024)
     logits = b["logits"] + b["logits upcast"]
-    weights = b["parameters"] + b["gradients"] + b["optimizer"] + b["master weights"]
-    assert logits > 2 * weights
+    assert logits > 2 * fixed_cost(b)
 
 
 def test_the_fixed_cost_is_independent_of_the_batch():
-    keys = ("parameters", "gradients", "optimizer", "master weights")
-    small = budget.budget(GEMMA, 1, 512)
-    large = budget.budget(GEMMA, 32, 4096)
-    assert sum(small[k] for k in keys) == sum(large[k] for k in keys)
+    assert (fixed_cost(budget.budget(GEMMA, 1, 512))
+            == fixed_cost(budget.budget(GEMMA, 32, 4096)))
 
 
 def test_memory_grows_with_the_product_of_batch_and_block():
@@ -48,3 +52,14 @@ def test_a_small_vocabulary_changes_the_shape_of_the_answer():
     g = budget.budget(GEMMA, 8, 1024)
     p = budget.budget(budget.CONFIGS["EleutherAI/pythia-160m"], 8, 1024)
     assert g["logits"] / p["logits"] > 4
+
+
+def test_the_two_recipes_differ_by_two_gigabytes():
+    """torch.optim.AdamW on a bf16 model keeps bf16 moments and no master
+    copy. Costing the mixed-precision recipe instead predicted 4.75 GB where
+    an RTX 3060 measured 2.54 at 1 x 512.
+    """
+    plain = sum(budget.budget(GEMMA, 1, 512, master_fp32=False).values())
+    mixed = sum(budget.budget(GEMMA, 1, 512, master_fp32=True).values())
+    assert 2.5 < plain / budget.GB < 3.0
+    assert 1.9 < (mixed - plain) / budget.GB < 2.1

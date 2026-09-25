@@ -30,15 +30,23 @@ def parameters(cfg):
 
 
 def budget(cfg, batch, block, dtype_bytes=2, optimizer="adamw",
-           master_fp32=True, checkpointing=True):
-    """Bytes, by what holds them."""
+           master_fp32=False, checkpointing=True):
+    """Bytes, by what holds them.
+
+    master_fp32 says which of two recipes is being costed, and the difference
+    is 2.0 GB for this model: an fp32 master copy, and moments that are fp32
+    rather than bf16. torch.optim.AdamW on a bf16 model keeps its two
+    moments in bf16 and holds no master copy, which is what src/train.py does
+    and what the measurement on an RTX 3060 matched: 2.54 GB at 1 x 512 where
+    the mixed-precision figure is 4.75. It is also numerically the worse of
+    the two, so the cheap answer is not automatically the right one.
+    """
     p = parameters(cfg)["total"]
     out = {"parameters": p * dtype_bytes,
            "gradients": p * dtype_bytes}
+    state_bytes = 4 if master_fp32 else dtype_bytes
     if optimizer == "adamw":
-        # Two moments. In fp32 whatever the parameters are, which is what any
-        # mixed-precision recipe does and what numerical stability wants.
-        out["optimizer"] = 2 * p * 4
+        out["optimizer"] = 2 * p * state_bytes
     elif optimizer == "sgd":
         out["optimizer"] = 0
     if master_fp32 and dtype_bytes < 4:
@@ -94,7 +102,10 @@ def main():
     ap.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"])
     ap.add_argument("--optimizer", default="adamw", choices=["adamw", "sgd"])
     ap.add_argument("--no-checkpointing", action="store_true")
-    ap.add_argument("--no-master-fp32", action="store_true")
+    ap.add_argument("--master-fp32", action="store_true",
+                    help="cost a mixed-precision recipe instead: fp32 master "
+                         "weights and fp32 optimizer moments. 3 GB more for "
+                         "this model, and the numerically sounder choice")
     ap.add_argument("--table", action="store_true",
                     help="sweep batch x block instead of one configuration")
     a = ap.parse_args()
@@ -115,15 +126,16 @@ def main():
             row = []
             for bl in blocks:
                 b = budget(cfg, bs, bl, db, a.optimizer,
-                           not a.no_master_fp32, not a.no_checkpointing)
+                           a.master_fp32, not a.no_checkpointing)
                 row.append(sum(b.values()) / GB)
             print(f"    {bs:>5} " + "".join(f"{v:>10.2f}" for v in row))
         return 0
 
     b = budget(cfg, a.batch, a.block, db, a.optimizer,
-               not a.no_master_fp32, not a.no_checkpointing)
+               a.master_fp32, not a.no_checkpointing)
     print(f"\n  batch {a.batch} x block {a.block} = {a.batch * a.block:,} tokens, "
-          f"{a.dtype}, {a.optimizer}")
+          f"{a.dtype}, {a.optimizer}"
+          f"{', fp32 master' if a.master_fp32 else ''}")
     for k, v in sorted(b.items(), key=lambda kv: -kv[1]):
         print(f"    {k:18} {v/GB:8.3f} GB")
     print(f"    {'total':18} {sum(b.values())/GB:8.3f} GB")

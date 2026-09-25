@@ -79,3 +79,15 @@ def test_a_starting_loss_at_chance_stops_the_run():
                encoding="utf-8").read()
     assert "looks_like_chance(first[" in src
     assert "raise SystemExit" in src.split("looks_like_chance(first[")[1][:400]
+
+
+def test_evaluation_has_its_own_batch_size():
+    """The fused loss applies in training mode only. Measured: 1 x 1024 costs
+    1.34 GB in train mode with the logits never built, and 3.55 GB in eval
+    mode with them built. A training batch the fusion makes affordable would
+    otherwise fail at the first checkpoint.
+    """
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "train.py"),
+               encoding="utf-8").read()
+    assert "--eval-batch-size" in src
+    assert "a.eval_batch_size, a.block_size" in src
