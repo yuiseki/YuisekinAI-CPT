@@ -125,7 +125,7 @@ def read_rows(path, config=DEFAULT_CONFIG, revision=None):
 
 
 def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None,
-         shots=SHOTS):
+         shots=SHOTS, exclude_leaks=False):
     """n questions from each level, not n from the whole set.
 
     There are 2,896 state questions and 17 ward questions, so a sample drawn
@@ -146,6 +146,12 @@ def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None,
     # a question nobody could answer.
     rows = [r for r in rows
             if r.get("child_" + lang) and r.get("parent_" + lang)]
+    if exclude_leaks:
+        # Questions whose subject already names the answer: "which
+        # municipality is 市立福島第三小学校 in" carries 福島市 inside it.
+        # Answering those is reading, not recall, and a model that cannot do
+        # the rest still scores on them.
+        rows = [r for r in rows if not r.get("answer_in_child_" + lang)]
     rows.sort(key=lambda r: (r["level"], r["child_id"]))
     prefixes, rows = few_shot(rows, lang, shots)
     by_level = collections.defaultdict(list)
@@ -303,6 +309,10 @@ def main():
                          "dataset as it is today")
     ap.add_argument("--n", type=int, default=200,
                     help="per level per language; 0 for all")
+    ap.add_argument("--exclude-leaks", action="store_true",
+                    help="drop questions whose subject names the answer. The "
+                         "dataset marks them; this is how to score without "
+                         "them")
     ap.add_argument("--chat", action="store_true",
                     help="wrap the question in the tokenizer's chat template. "
                          "Off by default: this is a completion task, and a "
@@ -323,7 +333,8 @@ def main():
     scores = {}
     for lang in a.langs:
         shots, rows = load(a.set, a.n, lang, config=a.config,
-                           revision=a.revision, shots=a.shots)
+                           revision=a.revision, shots=a.shots,
+                           exclude_leaks=a.exclude_leaks)
         print(f"{len(rows)} questions in {lang}, {a.shots} shots each")
         answers = (ask_endpoint(a.url, a.model_name, rows, lang, shots=shots)
                    if a.url
