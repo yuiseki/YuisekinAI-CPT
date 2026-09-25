@@ -98,12 +98,25 @@ the best of any open model and it is still the wrong base for this.
 
 ## What is here
 
+    tmp/main.ipynb    the whole experiment as one Colab notebook
     src/corpus.py     a published dataset -> one flat array of token ids
     src/train.py      continued pretraining, with a control corpus
     src/probe.py      which prefecture is this municipality in
     src/hierarchy_probe.py       which parent does this place have
     scripts/build_probe_set.py   rebuilds the answer key from the gazetteer
     scripts/dry_run.sh           every stage, small enough to finish here
+
+## On Colab
+
+`tmp/main.ipynb` runs top to bottom on an A100 and needs nothing from disk:
+the corpus, the control and the probe all come from the Hub. It is a flattened
+copy of `src/corpus.py`, `src/train.py` and `src/hierarchy_probe.py`, with
+`LIMIT` and `MAX_STEPS` for a smoke run first.
+
+38.7 million tokens under gemma's tokenizer, about 25 minutes of A100 time for
+one pass, 2 to 3 compute units. The generalisation probe is the one thing it
+cannot do by itself, because its answer key is `data/jp_municipalities.json`
+here rather than on the Hub; the last cell takes it as an upload.
 
 ## Run it here before renting anything
 
