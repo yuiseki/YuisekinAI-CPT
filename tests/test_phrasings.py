@@ -100,19 +100,35 @@ def test_half_of_them_open_the_way_the_cloze_probe_asks():
 def test_the_notebook_says_the_same_eight_things():
     """The notebook is a flattened copy, and a copy drifts.
 
-    tmp/main.ipynb carries its own PHRASE table so that it runs on Colab with
-    no checkout. If the two ever disagree, the corpus a run actually trains
-    on is not the one the tests here are about, and nothing would say so.
+    Each notebook in notebooks/ carries its own PHRASE table so that it runs
+    on Colab with no checkout. If one ever disagrees with the module, the
+    corpus that run trains on is not the one the tests here are about, and
+    nothing would say so.
+
+    Every notebook, not the newest: an older one that has been left behind by
+    a change to the module is exactly the case worth catching, and the fix is
+    to decide whether it is a record of a run that happened, in which case it
+    should not be regenerated and this test should name it as such, or a
+    notebook nobody has run yet.
     """
+    import glob
     import json
 
-    path = os.path.join(os.path.dirname(__file__), "..", "tmp", "main.ipynb")
-    if not os.path.exists(path):
+    found = sorted(glob.glob(os.path.join(
+        os.path.dirname(__file__), "..", "notebooks", "*.ipynb")))
+    if not found:
         pytest.skip("no notebook built; run tools/mk_notebook.py")
+    for path in found:
+        check_notebook_phrasings(path)
+
+
+def check_notebook_phrasings(path):
+    import json
+
     nb = json.load(open(path, encoding="utf-8"))
     code = "\n".join("".join(c["source"]) for c in nb["cells"]
                      if c["cell_type"] == "code")
     scope = {}
     body = code[code.index("PHRASE = ["):]
     exec(body[:body.index("\n\n\ndef address")], scope)
-    assert scope["PHRASE"] == phrasings.PHRASE
+    assert scope["PHRASE"] == phrasings.PHRASE, path

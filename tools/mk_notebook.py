@@ -1,4 +1,4 @@
-import json, os
+import json, os, sys
 
 def md(*lines):
     return {"cell_type": "markdown", "metadata": {}, "source": list(lines)}
@@ -824,7 +824,15 @@ nb = {"cells": cells,
                    "language_info": {"name": "python"}},
       "nbformat": 4, "nbformat_minor": 0}
 
-path = "/Workspaces/repos/__yuiseki/_research_ai/YuisekinAI-CPT/tmp/main.ipynb"
+# One notebook per model, named after the model it produced, so that a run
+# can be read back long after it happened. The generator overwrites it, which
+# is only safe while the notebook has not been run and edited by hand: what
+# is checked in here is the file that was uploaded to Colab, not a copy
+# brought back from it.
+path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "notebooks", "qwen3-0.6b-base-jp-gov-v0.1.ipynb")
+os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w", encoding="utf-8") as f:
     json.dump(nb, f, ensure_ascii=False, indent=1)
     f.write("\n")
