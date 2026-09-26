@@ -1,0 +1,70 @@
+{
+ "model": "llm-jp/llm-jp-3-440m",
+ "notebook": "notebooks/qwen3-0.6b-base-jp-gov-v0.1.1.ipynb",
+ "before": {
+  "cloze train": {
+   "municipality-in-prefecture": {
+    "correct": 124,
+    "n": 400,
+    "accuracy": 0.31,
+    "chance": 0.02127659574468085
+   }
+  },
+  "cloze eval": {
+   "municipality-in-prefecture": {
+    "correct": 58,
+    "n": 172,
+    "accuracy": 0.3372093023255814,
+    "chance": 0.02127659574468085
+   }
+  },
+  "cloze train no-leak": {
+   "municipality-in-prefecture": {
+    "correct": 101,
+    "n": 400,
+    "accuracy": 0.2525,
+    "chance": 0.02127659574468085
+   }
+  },
+  "cloze eval no-leak": {
+   "municipality-in-prefecture": {
+    "correct": 45,
+    "n": 158,
+    "accuracy": 0.2848101265822785,
+    "chance": 0.02127659574468085
+   }
+  },
+  "qa train": {
+   "municipality-in-prefecture": {
+    "correct": 362,
+    "n": 400,
+    "accuracy": 0.905,
+    "chance": 0.02127659574468085
+   }
+  },
+  "qa eval": {
+   "municipality-in-prefecture": {
+    "correct": 158,
+    "n": 172,
+    "accuracy": 0.9186046511627907,
+    "chance": 0.02127659574468085
+   }
+  },
+  "qa train no-leak": {
+   "municipality-in-prefecture": {
+    "correct": 367,
+    "n": 400,
+    "accuracy": 0.9175,
+    "chance": 0.02127659574468085
+   }
+  },
+  "qa eval no-leak": {
+   "municipality-in-prefecture": {
+    "correct": 144,
+    "n": 158,
+    "accuracy": 0.9113924050632911,
+    "chance": 0.02127659574468085
+   }
+  }
+ }
+}
