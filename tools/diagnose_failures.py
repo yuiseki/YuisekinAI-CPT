@@ -51,7 +51,12 @@ for i, r in enumerate(train):
     said = next((p for p in size if bare(p) in first), None)
     out.append({"child": r["child_ja"], "want": r["parent_ja"], "got": first,
                 "said": said, "ok": ok,
-                "name_tokens": len(tok(r["child_ja"])["input_ids"])})
+                # Without the special tokens. llm-jp puts <s> in front and
+                # Qwen puts nothing, so counting them made every llm-jp name
+                # one token longer than every Qwen name and the bands of two
+                # tokenizers stopped meaning the same thing.
+                "name_tokens": len(tok(r["child_ja"],
+                                       add_special_tokens=False)["input_ids"])})
     if (i + 1) % 400 == 0:
         print(f"  {i+1}/{len(train)}", flush=True)
 
