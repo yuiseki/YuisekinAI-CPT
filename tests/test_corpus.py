@@ -76,9 +76,20 @@ def test_the_builder_leaves_without_finalising_the_interpreter():
 
 
 def test_where_selects_rows_by_column():
-    assert corpus.parse_where(["form=ja"]) == {"form": "ja"}
-    assert corpus.parse_where(["a=1", "b=2"]) == {"a": "1", "b": "2"}
+    assert corpus.parse_where(["form=ja"]) == {"form": {"ja"}}
+    assert corpus.parse_where(["a=1", "b=2"]) == {"a": {"1"}, "b": {"2"}}
     assert corpus.parse_where(None) == {}
+
+
+def test_a_comma_means_any_of():
+    """One column, several acceptable values.
+
+    The two directions of a containment are two predicates saying one fact,
+    and a run that wants both cannot say so with two flags: those would read
+    as a conjunction and keep nothing.
+    """
+    assert corpus.parse_where(["predicate=sfWithin,sfContains"]) == {
+        "predicate": {"sfWithin", "sfContains"}}
 
 
 def test_where_without_a_value_is_refused():
@@ -101,5 +112,6 @@ def test_the_limit_counts_what_is_kept_not_what_is_read(monkeypatch):
     monkeypatch.setitem(sys.modules, "datasets",
                         type(sys)("datasets"))
     sys.modules["datasets"].load_dataset = lambda *a, **k: rows
-    got = list(corpus.documents("d", "cpt", "train", "text", 2, {"form": "ja"}))
+    got = list(corpus.documents("d", "cpt", "train", "text", 2,
+                                {"form": {"ja"}}))
     assert got == ["j0", "j1"]

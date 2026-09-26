@@ -53,18 +53,21 @@ def write(tokens_iter, out, dtype=DTYPE, flush_every=1_000_000):
 
 
 def parse_where(pairs):
-    """["form=ja"] -> {"form": "ja"}, so a subset can be selected by column.
+    """["form=ja"] -> {"form": {"ja"}}, so a subset can be selected by column.
 
-    geo-triples-tokyo23 keeps its three forms in one table with a form column
-    rather than in three subsets, so that they can be weighted or one of them
-    dropped without rebuilding. Selecting one of them is this flag.
+    geo-triples keeps its forms, topics and predicates in one table with
+    columns rather than in separate subsets, so that they can be weighted or
+    dropped without rebuilding. Selecting among them is this flag.
+
+    A comma means any of: predicate=sfWithin,sfContains keeps both. The
+    alternative, one flag per value, would read as an impossible conjunction.
     """
     out = {}
     for p in pairs or ():
         if "=" not in p:
             raise SystemExit(f"--where wants column=value, not {p!r}")
         col, value = p.split("=", 1)
-        out[col] = value
+        out[col] = set(value.split(","))
     return out
 
 
@@ -82,7 +85,7 @@ def documents(dataset, config, split, text_field, limit, where=None):
     ds = load_dataset(dataset, config, split=split, streaming=True)
     kept = 0
     for row in ds:
-        if any(str(row.get(k)) != v for k, v in where.items()):
+        if any(str(row.get(k)) not in v for k, v in where.items()):
             continue
         text = row.get(text_field)
         if not text:
