@@ -1,0 +1,21 @@
+{
+  "model": "Qwen3.6-35B-A3B ceiling",
+  "scores": {
+    "en": {
+      "municipality-in-prefecture": {
+        "correct": 308,
+        "n": 400,
+        "accuracy": 0.77,
+        "chance": 0.02127659574468085
+      }
+    },
+    "ja": {
+      "municipality-in-prefecture": {
+        "correct": 298,
+        "n": 400,
+        "accuracy": 0.745,
+        "chance": 0.02127659574468085
+      }
+    }
+  }
+}

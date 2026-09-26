@@ -1,0 +1,22 @@
+{
+  "model": "Qwen3.6-35B-A3B ceiling",
+  "scores": {
+    "en": {
+      "municipality-in-prefecture": {
+        "correct": 135,
+        "n": 175,
+        "accuracy": 0.7714285714285715,
+        "chance": 0.02127659574468085
+      }
+    },
+    "ja": {
+      "municipality-in-prefecture": {
+        "correct": 107,
+        "n": 175,
+        "accuracy": 0.6114285714285714,
+        "chance": 0.02127659574468085
+      }
+    }
+  },
+  "note": "the English half was retaken; the endpoint dropped during the first attempt and every answer came back ConnectError"
+}

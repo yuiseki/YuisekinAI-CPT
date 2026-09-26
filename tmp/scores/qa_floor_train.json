@@ -1,0 +1,21 @@
+{
+  "model": "Qwen3-0.6B-Base floor",
+  "scores": {
+    "en": {
+      "municipality-in-prefecture": {
+        "correct": 179,
+        "n": 1629,
+        "accuracy": 0.10988336402701043,
+        "chance": 0.02127659574468085
+      }
+    },
+    "ja": {
+      "municipality-in-prefecture": {
+        "correct": 90,
+        "n": 1629,
+        "accuracy": 0.055248618784530384,
+        "chance": 0.02127659574468085
+      }
+    }
+  }
+}
