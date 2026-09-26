@@ -162,3 +162,24 @@ def test_the_schedule_grows_the_corpus_by_about_three_fifths(tmp_path):
     lengths = [2] * 58 + [3] * 880 + [4] * 694
     grown = sum(phrasings.repeats(n) for n in lengths) / len(lengths)
     assert 1.55 < grown < 1.70, grown
+
+
+def test_the_schedule_does_not_follow_the_tokenizer_being_trained():
+    """Changing the model must not silently change the corpus.
+
+    The schedule writes a fact more often when its subject is short, and short
+    is a property of a tokenizer: 篠栗町 is three tokens to Qwen and two to
+    llm-jp. When the builder counted with the tokenizer it was about to train,
+    pointing MODEL at llm-jp changed the sentence set as well as the model,
+    from 1.61 copies of each fact to 2.41, and a run meant to compare two
+    tokenizers would have carried two variables.
+
+    This is asserted of the generator rather than of the notebooks in
+    notebooks/, which are records of runs that happened and must not be
+    regenerated to satisfy a later test.
+    """
+    source = open(os.path.join(os.path.dirname(__file__), "..",
+                               "tools", "mk_notebook.py"), encoding="utf-8").read()
+    assert "SCHEDULE   =" in source, "the schedule has no tokenizer of its own"
+    assert "repeats(len(tok(" not in source, \
+        "the schedule is counting with the tokenizer being trained"

@@ -189,6 +189,17 @@ PREDICATES = "sfWithin,sfContains"
 FROM_PROBE = True     # build the corpus from the probe's train split
 PHRASINGS  = 8        # how many of the eight to use
 
+# Whose tokenizer the exposure schedule counts names with, or None to write
+# every fact exactly once.
+#
+# This is deliberately not MODEL. The schedule writes a fact three times when
+# its subject is short, and "short" is a property of a tokenizer, not of a
+# name: 篠栗町 is three tokens to Qwen and two to llm-jp. Letting the schedule
+# follow MODEL would mean a run that changes the model silently changes the
+# corpus too, and the comparison would carry two variables. Pinning it names
+# which corpus is being reused; setting it to None reproduces run 1's.
+SCHEDULE   = "Qwen/Qwen3-0.6B-Base"
+
 # Where the memory goes is the logits, not the model: batch x block x 151,669
 # vocabulary entries, upcast to fp32 for the loss. The first step prints the
 # peak. If it runs out, halve BATCH before touching anything else; gradient
@@ -203,6 +214,19 @@ EPOCHS      = 60.0        # unchanged from run 1, so the facts that were
                           # already learnt see exactly what they saw then.
                           # The corpus is 1.6 times longer, so the run is
                           # 1.6 times longer: about 8,100 steps.
+                          #
+                          # Epochs rather than steps is also what makes a run
+                          # with a different tokenizer comparable. The corpus
+                          # is written as text and segmented by whichever
+                          # tokenizer is being trained, so the same sentences
+                          # are a different number of tokens: 271,472 under
+                          # Qwen and 251,258 under llm-jp. Holding epochs
+                          # holds how often each fact is read and lets the
+                          # step count differ; holding steps would hold the
+                          # number of updates and let the reading differ.
+                          # Neither is free of a confound, and the first one
+                          # is the one this is asking about. Report the step
+                          # count as a result, not as a nuisance.
 EVAL_EVERY  = 100
 EVAL_ITERS  = 20
 EVAL_BATCH  = 1           # eval builds the logits; training with liger does not
@@ -597,7 +621,7 @@ os.makedirs("data", exist_ok=True)
 
 
 def build_from_probe(out, dataset, model, n_phrasings, revision=None,
-                     register=REGISTER):
+                     register=REGISTER, schedule=SCHEDULE):
     """Every fact on the train side of the split, said n ways.
 
     The probe subset is the fact set, one row per child with its parent, so
@@ -628,11 +652,16 @@ def build_from_probe(out, dataset, model, n_phrasings, revision=None,
                              f"are not the same vintage")
         facts.append({"child": r["child_ja"], "parent": r["parent_ja"],
                       "address": address(m["pref"], m["county"], m["name"])})
+    # The schedule counts with its own tokenizer, which is usually not the one
+    # being trained. See SCHEDULE in the configuration cell.
+    counter = (AutoTokenizer.from_pretrained(schedule) if schedule else None)
     texts = []
     for f in facts:
         said = phrasings(f, n_phrasings)
-        texts.extend(said * repeats(len(tok(f["child"],
-                                            add_special_tokens=False)["input_ids"])))
+        n = (repeats(len(counter(f["child"],
+                                 add_special_tokens=False)["input_ids"]))
+             if counter else 1)
+        texts.extend(said * n)
     # Sorted, then shuffled with a fixed seed. Sorting first makes the order
     # independent of how the rows arrived; shuffling stops the eight
     # phrasings of one fact from always landing in the same window.
