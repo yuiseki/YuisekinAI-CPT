@@ -15,8 +15,27 @@ the sampling and the scoring are the same ones the runs use.
     qa eval                     91.9%           10.5%              18.6%
     qa eval no-leak             91.1%            3.8%              19.6%
 
-Chance is 2.1%. The Qwen before-column is from run 1 on Colab; a repeat on
-this machine's CPU is in `baseline_qwen3_06b.json`.
+Chance is 2.1%. The Qwen before-column is from run 1 on Colab.
+
+## The measurement reproduces across machines and dtypes
+
+Qwen's before-column was taken twice, once on Colab in bfloat16 on a GPU and
+once here in float32 on the CPU. Greedy decoding still diverges between the
+two, so the question is how far.
+
+                          Colab, bf16    here, fp32     diff
+    cloze train               3.3%          3.5%       +0.2
+    cloze train no-leak       2.3%          2.5%       +0.2
+    cloze eval                4.7%          4.1%       -0.6
+    cloze eval no-leak        3.8%          3.2%       -0.6
+    qa train                  3.8%          3.5%       -0.3
+    qa train no-leak          1.8%          1.8%        0.0
+    qa eval                  10.5%          9.3%       -1.2
+    qa eval no-leak           3.8%          4.4%       +0.6
+
+At most 1.2 points and under half a point on average, which is the noise floor
+to read the rest of this file against. The 87-point gap between llm-jp and Qwen
+is not an artefact of where it was measured.
 
 ## The 91% was checked before it was believed
 
