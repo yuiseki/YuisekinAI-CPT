@@ -1,12 +1,16 @@
 """Is this model worth publishing? Four questions it has to answer."""
-import json, os, random, sys, collections
-sys.path.insert(0, "/Workspaces/repos/__yuiseki/_research_ai/YuisekinAI-CPT/src")
-import phrasings
+import json, random, sys, collections
 from datasets import load_dataset
 
-TRAINED = "/Workspaces/repos/__yuiseki/_research_ai/YuisekinAI-CPT/tmp/2026-09-26"
+# The published model, not the directory it was uploaded from. A local path
+# works too, as the first argument, which is how a run is measured before it
+# is published.
+#
+#     python3 tools/battery.py                      # the published weights
+#     python3 tools/battery.py tmp/<run> out.json   # a run not yet published
+TRAINED = sys.argv[1] if len(sys.argv) > 1 else "yuiseki/qwen3-0.6b-jp-gov-v0.1"
 BASE = "Qwen/Qwen3-0.6B-Base"
-OUT = "/tmp/claude-1000/-Workspaces/27c7b3b4-1ef2-451a-ac6c-a8b3cfc175cc/scratchpad/battery.json"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "battery.json"
 N = 200
 
 

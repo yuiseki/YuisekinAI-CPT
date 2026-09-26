@@ -11,3 +11,7 @@ __pycache__/
 runs/
 checkpoints/
 *.safetensors
+
+# Local copies of published model directories. The weights are on the Hub and
+# the card, the scores and the run log are kept in tmp/scores/ as text.
+tmp/qwen3-*/
