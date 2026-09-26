@@ -1,4 +1,17 @@
-import json, os, sys
+import argparse, json, os, sys
+
+# Which model this notebook trains, and whose tokenizer decides how often a
+# fact is written. The defaults reproduce the run that has already happened,
+# so regenerating an existing notebook is a no-op rather than a rewrite of a
+# record.
+_ap = argparse.ArgumentParser()
+_ap.add_argument("out", nargs="?")
+_ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
+_ap.add_argument("--schedule", default="Qwen/Qwen3-0.6B-Base",
+                 help='"none" writes every fact exactly once')
+ARGS = _ap.parse_args()
+MODEL_ID = ARGS.model
+SCHEDULE_ID = None if ARGS.schedule.lower() == "none" else ARGS.schedule
 
 def md(*lines):
     return {"cell_type": "markdown", "metadata": {}, "source": list(lines)}
@@ -21,8 +34,9 @@ One pass of continued pretraining on a corpus of spatial facts about Japan,
 with the measurement on both sides of it. Runs top to bottom on a Colab A100
 and needs nothing from disk.
 
-The narrowest question that is still worth answering: can a 0.6B model learn
-which prefecture each of Japan's municipalities is in?
+The narrowest question that is still worth answering: can a model of well
+under a billion parameters learn which prefecture each of Japan's
+municipalities is in?
 
 The facts come from the `probe` subset of
 [`yuiseki/geo-triples-jp-gov`](https://huggingface.co/datasets/yuiseki/geo-triples-jp-gov),
@@ -125,11 +139,20 @@ Where this starts, measured on 2026-09-26 before any training:
 | Qwen3-0.6B-Base | qa | eval | 5.7% | 15.4% |
 | Qwen3.6-35B-A3B | qa | train | 74.5% | 77.0% |
 | Qwen3.6-35B-A3B | qa | eval | 61.1% | 77.1% |
+| llm-jp-3-440m | cloze | train | 31.0% | |
+| llm-jp-3-440m | cloze | eval | 33.7% | |
+| llm-jp-3-440m | qa | train | 90.5% | |
+| llm-jp-3-440m | qa | eval | 91.9% | |
 
 Chance is 2.1%. The number to watch is cloze on the train half: every
 sentence in the corpus is the shape that question opens, so if the facts are
 in the model at all, that is where they show. The two halves agree before
 training, which is what makes the eval half usable as a control afterwards.
+
+The llm-jp row is a smaller model, freely licensed under the same Apache 2.0,
+that answers nine questions in ten before anything is done to it, and
+completes three sentences in ten. It was rescored three ways before being
+believed. Whatever a run on it is for, it is not teaching it these facts.
 
 Sixty passes over 172,000 tokens is a few minutes of A100 time. The probes
 cost more than the training does at this size. Well under a compute unit for
@@ -185,7 +208,7 @@ PREDICATES = "sfWithin,sfContains"
 # template; the gradients for 1,632 facts in one sentence pattern mostly
 # cancel.
 #
-# 1,632 facts is about 9,000 bits. A 0.6B model is not short of room for them.
+# 1,632 facts is about 9,000 bits. Neither model here is short of room.
 FROM_PROBE = True     # build the corpus from the probe's train split
 PHRASINGS  = 8        # how many of the eight to use
 
@@ -200,20 +223,21 @@ PHRASINGS  = 8        # how many of the eight to use
 # which corpus is being reused; setting it to None reproduces run 1's.
 SCHEDULE   = "Qwen/Qwen3-0.6B-Base"
 
-# Where the memory goes is the logits, not the model: batch x block x 151,669
-# vocabulary entries, upcast to fp32 for the loss. The first step prints the
-# peak. If it runs out, halve BATCH before touching anything else; gradient
-# accumulation makes that free, because 8 x 2 and 4 x 4 see the same tokens.
-# Small, because the corpus is small. 172,000 tokens at 2,048 a step is 84
-# steps an epoch.
+# Where the memory goes is the logits, not the model: batch x block x the
+# vocabulary, upcast to fp32 for the loss. That is 151,669 entries for Qwen
+# and 99,574 for llm-jp, so a smaller tokenizer is cheaper here as well as
+# shorter. The first step prints the peak. If it runs out, halve BATCH before
+# touching anything else; gradient accumulation makes that free, because
+# 8 x 2 and 4 x 4 see the same tokens. Small, because the corpus is small.
 BLOCK       = 512
 BATCH       = 4
 GRAD_ACCUM  = 1
-LR          = 1e-4        # this corpus is 172,000 tokens, not 30 million
-EPOCHS      = 60.0        # unchanged from run 1, so the facts that were
-                          # already learnt see exactly what they saw then.
-                          # The corpus is 1.6 times longer, so the run is
-                          # 1.6 times longer: about 8,100 steps.
+LR          = 1e-4        # this corpus is a hundred thousand tokens or two,
+                          # not thirty million
+EPOCHS      = 60.0        # unchanged since run 1, so a fact is read the same
+                          # number of times in every run and the step count
+                          # follows from the corpus rather than the other way
+                          # round.
                           #
                           # Epochs rather than steps is also what makes a run
                           # with a different tokenizer comparable. The corpus
@@ -260,6 +284,27 @@ and the probe is sampled per level.
 
 cells.append(code(*src(r'''
 import collections, json, math, os, random, time
+
+# How long each stage took, filled in as the notebook runs and printed whole
+# at the end. A run that has to be read back from a pasted log is much easier
+# to reason about when the timings are in one place: whether the probe or the
+# training dominated, and what a step cost, decide what to change next.
+TIMES = {}
+
+
+def stage(name):
+    """with stage("training"): ... records the wall clock under that name."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def timed():
+        t0 = time.time()
+        try:
+            yield
+        finally:
+            TIMES[name] = time.time() - t0
+
+    return timed()
 import numpy as np
 import torch
 from datasets import load_dataset
@@ -563,7 +608,8 @@ def ask(model, tok, shots, rows, lang, device, chat=False, mode="qa"):
     Asked as plain text unless chat is on. Qwen3-0.6B-Base ships a chat
     template although it is a base model, and wrapping a few-shot block in
     ChatML makes it answer by continuing the list of questions: every score
-    was zero, and none of it was about the model's geography.
+    was zero, and none of it was about the model's geography. Leave chat off
+    for any base model, whether or not it carries a template.
     """
     templated = chat and getattr(tok, "chat_template", None)
     model.eval()
@@ -702,15 +748,16 @@ if TRAIN_ONLY:
     # The held-out places, dropped here rather than filtered later, so that
     # nothing downstream has to remember to.
     where["holdout"] = "False"
-if FROM_PROBE:
-    n_corpus = build_from_probe("data/geo.bin", DATASET, MODEL, PHRASINGS,
-                                revision=REVISION, register=REGISTER)
-else:
-    n_corpus = build_corpus("data/geo.bin", DATASET, "cpt", MODEL,
-                            where=where or None, limit=LIMIT,
-                            revision=REVISION)
-n_control = build_corpus("data/control.bin", "yuiseki/wikipedia-geotagged",
-                         CONTROL, MODEL, limit=CONTROL_DOCS)
+with stage("corpus"):
+    if FROM_PROBE:
+        n_corpus = build_from_probe("data/geo.bin", DATASET, MODEL, PHRASINGS,
+                                    revision=REVISION, register=REGISTER)
+    else:
+        n_corpus = build_corpus("data/geo.bin", DATASET, "cpt", MODEL,
+                                where=where or None, limit=LIMIT,
+                                revision=REVISION)
+    n_control = build_corpus("data/control.bin", "yuiseki/wikipedia-geotagged",
+                             CONTROL, MODEL, limit=CONTROL_DOCS)
 ''')))
 
 cells.append(md(*src(r'''
@@ -756,7 +803,8 @@ def run_probe(model, tok, label):
     return out
 
 
-before = run_probe(model, tok, f"{MODEL} before")
+with stage("probe before"):
+    before = run_probe(model, tok, f"{MODEL} before")
 ''')))
 
 cells.append(md("## 6. The run"))
@@ -837,15 +885,18 @@ for step in range(1, steps + 1):
         checkpoint(step)
 
 seen = steps * per_step
-print(f"{seen:,} tokens in {time.time() - began:.0f}s")
-model.save_pretrained(OUT)
-tok.save_pretrained(OUT)
+TIMES["training"] = time.time() - began
+print(f"{seen:,} tokens in {TIMES['training']:.0f}s")
+with stage("saving"):
+    model.save_pretrained(OUT)
+    tok.save_pretrained(OUT)
 ''')))
 
 cells.append(md("## 7. After"))
 
 cells.append(code(*src(r'''
-after = run_probe(model, tok, f"{MODEL} after")
+with stage("probe after"):
+    after = run_probe(model, tok, f"{MODEL} after")
 
 print("\n=== recall, on places the corpus states outright")
 for tag in sorted(before):
@@ -872,6 +923,165 @@ json.dump({"before": before, "after": after, "log": log},
 print(f"\nwrote {OUT}/result.json")
 ''')))
 
+cells.append(md(*src(r'''
+## 8. The run in one block
+
+Everything needed to compare this run with another, in a form that survives
+being pasted into a chat window: what was configured, what it scored, what it
+cost, and how fast it went. Read the timings before deciding what to change.
+A run where the probe costs more than the training is a run whose PROBE_N is
+the wrong size, and a step time that drifts upward is a machine throttling
+rather than a model learning.
+''')))
+
+cells.append(code(*src(r'''
+def hms(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+
+print("=" * 64)
+print(f"{'model':16} {MODEL}")
+print(f"{'dataset':16} {DATASET} @ {REVISION or 'main'}")
+print(f"{'schedule':16} {SCHEDULE or 'off, every fact written once'}")
+print(f"{'corpus':16} {len(tokens):,} tokens, {PHRASINGS} phrasings, "
+      f"{EPOCHS:g} epochs")
+print(f"{'optimiser':16} lr {LR:g}, block {BLOCK}, batch {BATCH} x {GRAD_ACCUM}"
+      f", replay {REPLAY:.0%}")
+print(f"{'steps':16} {steps:,} of {per_step:,} tokens, {seen:,} seen")
+if device == "cuda":
+    print(f"{'device':16} {torch.cuda.get_device_name(0)}, peak "
+          f"{torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
+else:
+    print(f"{'device':16} {device}")
+
+print("\n--- scores, before -> after")
+print(f"  {'condition':22} {'before':>8} {'after':>8} {'diff':>8}")
+for tag in sorted(before):
+    for level in sorted(before[tag]):
+        b, a = before[tag][level], after[tag][level]
+        print(f"  {tag:22} {b['accuracy']:8.1%} {a['accuracy']:8.1%} "
+              f"{a['accuracy'] - b['accuracy']:+8.1%}  on {b['n']}")
+
+print("\n--- loss")
+print(f"  {'held-out':22} {log[0]['held_out']:8.4f} {log[-1]['held_out']:8.4f} "
+      f"{log[-1]['held_out'] - log[0]['held_out']:+8.4f}")
+print(f"  {'control':22} {log[0]['control']:8.4f} {log[-1]['control']:8.4f} "
+      f"{log[-1]['control'] - log[0]['control']:+8.4f}")
+best = min(log, key=lambda r: r["held_out"])
+print(f"  held-out was lowest at step {best['step']:,}: {best['held_out']:.4f}")
+
+print("\n--- time")
+for name, seconds in TIMES.items():
+    print(f"  {name:22} {hms(seconds):>10}")
+print(f"  {'total':22} {hms(sum(TIMES.values())):>10}")
+
+# Per-step cost from the checkpoints rather than from the total, so that the
+# evaluations and the saving do not get charged to the training loop.
+marks = [(r["step"], r["elapsed_s"]) for r in log]
+if len(marks) > 1:
+    per = [(s2 - s1, t2 - t1) for (s1, t1), (s2, t2) in zip(marks, marks[1:])
+           if s2 > s1]
+    rates = [t / n for n, t in per]
+    print(f"  {'per step':22} {sum(rates) / len(rates) * 1000:>7.0f} ms"
+          f"   (first block {rates[0] * 1000:.0f}, last {rates[-1] * 1000:.0f})")
+    print(f"  {'tokens per second':22} {per_step / (sum(rates) / len(rates)):>10,.0f}")
+print("=" * 64)
+''')))
+
+
+def rebind(name, value):
+    """Rewrite one assignment in the configuration cell.
+
+    The cell bodies are raw strings full of {child} and {parent}, so they
+    cannot be run through str.format, and the two settings that vary between
+    runs are not worth a templating language. This edits the built cell and
+    fails loudly if the line it is looking for has moved.
+    """
+    for cell in cells:
+        for i, line in enumerate(cell["source"]):
+            if line.startswith(name):
+                keep = line[len(line.rstrip("\n")):]
+                cell["source"][i] = f"{name}= {value!r}{keep}"
+                return
+    raise SystemExit(f"no {name.strip()} assignment to rebind")
+
+
+# What this particular run is for, inserted after the introduction. Keyed on
+# the model, because the reason to run a notebook is rarely the same twice and
+# a notebook that does not say why it exists is hard to read a month later.
+RUN_NOTES = {
+    "llm-jp/llm-jp-3-440m": r"""
+## Why this run exists
+
+Not to teach this model these facts. It already answers 90.5% of the
+questions on the train half and 91.9% on the eval half, which is four and a
+half times what sixty epochs of continued pretraining got Qwen3-0.6B-Base to
+on the half it had never read. Teaching it would be measuring nothing.
+
+It exists to settle a question left over from those runs, and it can only be
+settled inside one model.
+
+Qwen failed on short names. Names of two Qwen tokens came back wrong 60.3% of
+the time against 1.7% for names of six, and writing the short ones three times
+as often did not move them: 39.7% to 36.2% over 58 names, four fixed and six
+broken. Two readings survive that. Either a short name is hard because the
+tokenizer gave it too little to hang a fact on, in which case a tokenizer
+built for Japanese would not have the problem, or a short name is hard for
+some reason of its own that no tokenizer design reaches.
+
+Comparing the two models does not separate these. llm-jp was pretrained on
+Japanese and Qwen was not, so any difference between them carries both causes
+at once. The question has to be asked within llm-jp: after this run, band the
+1,632 facts by how many tokens **llm-jp's own tokenizer** gives each name, and
+look at the short bands. If one- and two-token names fail here the way they
+failed on Qwen, the difficulty is in the names. If they do not, it is in the
+tokenizer, and that is a finding about how to build one.
+
+The two tokenizers do not agree about which names are short, which is the
+whole reason this is worth doing. llm-jp gives a prefecture name one token
+where Qwen gives 3.19, and a municipality name 2.47 against 3.66. Of the 58
+names Qwen cuts into two tokens, llm-jp cuts 12 into one and 7 into three.
+
+## What is held fixed
+
+`SCHEDULE` is off, so every fact is written exactly once. This is deliberate
+and it is not the corpus run 2 used.
+
+Run 2 wrote short names more often, and the result was that the untouched
+bands got worse although their own exposure had not changed: what fell was
+their share of the corpus. Leaving the schedule on here would mean that a
+short name failing could always be answered with "it was not written enough
+times", which is the argument run 1 and run 2 already spent themselves on.
+Equal exposure closes it. If a short name fails when every fact was written
+the same number of times, the exposure reading is finished.
+
+`EPOCHS` stays at 60. The corpus is the same sentences as run 1, and llm-jp
+segments them into fewer tokens than Qwen does, so this run is shorter in
+steps while reading each fact exactly as often. Report the step count as a
+property of the tokenizer, not as something to correct for.
+
+## What to watch, and what it would cost
+
+cloze on the train half is the number this run is about: it starts at 31.0%
+against a qa score of 90.5%, so this model knows the facts and cannot state
+them in the corpus's own sentence form. That gap is the opposite of the one
+the trained Qwen ended with, 93.5% cloze against 75.2% qa.
+
+qa is what there is to lose. Qwen had nothing to forget here and this model
+has a great deal, so a rise in cloze bought with a fall in qa is a real
+result and not a rounding error. Watch both, and watch the control loss.
+""",
+}
+
+note = RUN_NOTES.get(MODEL_ID)
+if note:
+    cells.insert(1, md(*src(note)))
+
+rebind("MODEL     ", MODEL_ID)
+rebind("SCHEDULE   ", SCHEDULE_ID)
+
 nb = {"cells": cells,
       "metadata": {"accelerator": "GPU",
                    "colab": {"provenance": [], "gpuType": "A100"},
@@ -885,7 +1095,7 @@ nb = {"cells": cells,
 # is only safe while the notebook has not been run and edited by hand: what
 # is checked in here is the file that was uploaded to Colab, not a copy
 # brought back from it.
-path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+path = ARGS.out or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "notebooks", "qwen3-0.6b-base-jp-gov-v0.1.ipynb")
 os.makedirs(os.path.dirname(path), exist_ok=True)
