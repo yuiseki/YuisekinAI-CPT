@@ -1,7 +1,9 @@
 # Attribution and licence
 
-The code in this repository is MIT. See LICENSE. It does not cover the data
-it reads, and that data does not cover it.
+The code in this repository is MIT. See LICENSE, which is the licence text
+and nothing else, so that it is recognised as MIT rather than as a modified
+licence. It covers the code only: the data this code downloads is under the
+terms below, and those terms do not cover the code.
 
 Nothing here redistributes a corpus. Every dataset is fetched from the Hub at
 run time, and the two files checked in under `data/` are described below.
