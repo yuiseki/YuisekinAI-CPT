@@ -23,7 +23,8 @@ Two things this probe has already been wrong about, both kept in the tests:
 Chance is 1 in 47. Report it beside the score or 2% reads as knowledge.
 
     python3 src/probe.py --model google/gemma-3-270m-it --n 250
-    python3 src/probe.py --url http://127.0.0.1:8080 --model-name gvt-llm
+    python3 src/probe.py --url http://localhost:8080 \
+        --model-name the-name-your-server-serves
 """
 import argparse
 import collections
@@ -169,7 +170,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", help="a local model or a Hub id")
     ap.add_argument("--url", help="an OpenAI-compatible endpoint instead")
-    ap.add_argument("--model-name", default="gvt-llm", help="with --url")
+    # No default: the name is whatever the endpoint calls what it serves.
+    ap.add_argument("--model-name", help="required with --url")
     ap.add_argument("--set", default=DEFAULT_SET)
     ap.add_argument("--n", type=int, default=250, help="0 means all")
     ap.add_argument("--forms", nargs="*", default=["qa", "chat"],
@@ -182,6 +184,9 @@ def main():
 
     if not (a.model or a.url):
         ap.error("give --model or --url")
+    if a.url and not a.model_name:
+        ap.error("--url needs --model-name: ask the endpoint what it serves, "
+                 "for instance with curl $URL/v1/models")
     rows = load_set(a.set, a.n)
     print(f"{len(rows)} municipalities from {os.path.basename(a.set)}")
 

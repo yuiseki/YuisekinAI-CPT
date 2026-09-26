@@ -20,7 +20,8 @@ carry the harder one.
 
     python3 src/hierarchy_probe.py --model google/gemma-3-270m --n 200 \
         --set /path/to/probe.parquet     # or a local copy
-    python3 src/hierarchy_probe.py --url http://10.108.45.102:8080 --model-name gvt-llm
+    python3 src/hierarchy_probe.py --url http://localhost:8080 \
+        --model-name the-name-your-server-serves
 """
 import argparse
 import collections
@@ -338,7 +339,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model")
     ap.add_argument("--url")
-    ap.add_argument("--model-name", default="gvt-llm")
+    # No default. The name is whatever the server calls the model it is
+    # serving, and a wrong one is accepted by some servers and refused by
+    # others, so a baked-in guess fails in the confusing direction.
+    ap.add_argument("--model-name",
+                    help="required with --url: the model name the endpoint "
+                         "serves")
     ap.add_argument("--set", default=DEFAULT_SET,
                     help="a Hugging Face dataset, or a local parquet or json")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
@@ -378,6 +384,9 @@ def main():
 
     if not (a.model or a.url):
         ap.error("give --model or --url")
+    if a.url and not a.model_name:
+        ap.error("--url needs --model-name: ask the endpoint what it serves, "
+                 "for instance with curl $URL/v1/models")
 
     scores = {}
     for lang in a.langs:

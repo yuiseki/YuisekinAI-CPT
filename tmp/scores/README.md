@@ -43,6 +43,5 @@ ConnectError for all 175; it was retaken.
 
     python3 src/hierarchy_probe.py --model Qwen/Qwen3-0.6B-Base \
         --set yuiseki/geo-triples-jp-gov --n 0 --split train
-    python3 src/hierarchy_probe.py --url http://10.108.45.102:8080 \
-        --model-name gvt-llm --set yuiseki/geo-triples-jp-gov --n 400 \
-        --split train
+    python3 src/hierarchy_probe.py --url $ENDPOINT --model-name $MODEL \
+        --set yuiseki/geo-triples-jp-gov --n 400 --split train

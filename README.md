@@ -10,88 +10,104 @@ writes `Hiroshima City, Tokyo, Japan`, which is well formed and returns nothing
 from a map query. Does feeding it geographic text fix that, and what does it
 break on the way?
 
-## The floor and the ceiling, measured before any training
+It does, for the facts it is fed.
 
-250 Japanese municipalities, one prefecture each, drawn from
-[`yuiseki/wikidata-gazetteer`](https://huggingface.co/datasets/yuiseki/wikidata-gazetteer).
-Chance is 1 in 47.
+## What came out of it
 
-| model | form | overall | <20k | 20k-100k | 100k+ |
-|---|---|---|---|---|---|
-| Qwen3.6-35B-A3B | chat | 83.6% | 68.4% | 88.2% | 98.0% |
-| gemma-3-270m-it | qa | 6.4% | 2.5% | 5.0% | 16.3% |
-| gemma-3-270m-it | chat | 2.0% | 0.0% | 0.0% | 10.2% |
+[`yuiseki/qwen3-0.6b-jp-gov-v0.1`](https://huggingface.co/yuiseki/qwen3-0.6b-jp-gov-v0.1):
+Qwen3-0.6B-Base continued on 1,632 facts about where Japan's municipalities
+are, each said eight ways. Japanese, greedy decoding, the same prompt to every
+model, chance 2.1%.
 
-The gap is real and it is knowledge, not formatting: under the chat template
-the 270M model answers with the city's own name. The 35B knows the same facts
-and loses a third of the small towns, which says the knowledge scales with
-exposure rather than with capacity. 1,134 facts fit in 270M parameters many
-times over.
+| asked | Qwen3-0.6B-Base | after | Qwen3.6-35B-A3B |
+|---|---|---|---|
+| 「当別町は」, taught half | 2.2% | 86.5% | 69.8% |
+| 「当別町は」, held-out half | 3.8% | 22.8% | 72.0% |
+| 「当別町が属する都道府県は」 | 2.0% | 88.5% | |
+| 「Q: 当別町は何県にありますか。A:」 | 5.0% | 49.5% | |
+| 「北海道の市区町村のひとつが」 | 14.9% | 93.6% | |
 
-## The corpora
+It holds the table it was given better than a model fifty-eight times its
+size, and it does not know the municipalities it was not given: 22.8% on the
+held-out half against the 35B's 72.0%. That is the honest summary, and the
+model card says it in the same words.
 
-The corpus being learnt is the `cpt` subset of
-[`yuiseki/geo-triples-tokyo23`](https://huggingface.co/datasets/yuiseki/geo-triples-tokyo23),
-which states 126,208 true spatial facts three times over: as an N-Triples
-line, as an English sentence and as a Japanese one. Nothing in it was written
-by a model, and every statement is traceable to a DE-9IM matrix computed from
-frozen geometry.
+The 35B answering 69.8% of one half and 72.0% of the other is the control the
+split needed. It was shown neither, so the halves are equally hard, and the
+63.7-point gap in the small model is training rather than difficulty.
 
-| `form` | rows | characters |
-|---|---:|---:|
-| `ntriples` | 126,208 | 37,696,172 |
-| `en` | 89,500 | 6,567,573 |
-| `ja` | 89,500 | 4,030,260 |
+## The corpus
 
-The three sit in one table with a `form` column, so `--where form=ja` picks
-one and the weighting is a choice made at corpus time rather than at build
-time.
+The facts are the `probe` subset of
+[`yuiseki/geo-triples-jp-gov`](https://huggingface.co/datasets/yuiseki/geo-triples-jp-gov),
+computed from two frozen Japanese government registers by a Docker-pinned
+GeoSPARQL endpoint, with every step from a DE-9IM matrix to a predicate
+proved by a Lean development. Nothing in it was written by a model. CC BY 4.0.
 
-The control is `20260901.en` of
+Each fact is said eight ways, from `src/phrasings.py`:
+
+```
+当別町は北海道に含まれる。
+北海道は当別町を含む。
+当別町は北海道にある。
+当別町の所在する都道府県は北海道である。
+北海道の市区町村のひとつが当別町である。
+当別町は北海道の市区町村である。
+住所：北海道石狩郡当別町
+北海道石狩郡当別町
+```
+
+1,632 facts, 13,056 sentences, 185,832 characters, 172,304 tokens.
+
+Two of the eight are addresses, and they are why a register is worth using.
+当別町 is in 石狩郡 and its own name does not say so, so the 郡 is joined from
+[`yuiseki/jp-admin-2026-09`](https://huggingface.co/datasets/yuiseki/jp-admin-2026-09)
+on the local government code. 770 of the 1,632 have one. A corpus built from
+names alone writes 北海道当別町, which is how people write it rather than what
+it is.
+
+The variety is the lever. Four earlier runs said each fact one way and raised
+the exposure instead, reaching 23.3% at a hundred passes while the loss on
+general text began to rise. A model shown one template a hundred times learns
+the template.
+
+The control is `20260901.ja` of
 [`yuiseki/wikipedia-geotagged`](https://huggingface.co/datasets/yuiseki/wikipedia-geotagged),
-4,331,110,851 characters, never trained on. It is there to make forgetting
-visible at every checkpoint rather than at the end.
+never trained on. `REPLAY` mixes a share of it back into each batch, drawn
+from the half of it the control loss is not measured on.
 
-| subset | characters | tokens (gemma) | tokens (OLMo) |
-|---|---|---|---|
-| `20260901.ja` | 435,046,691 | 311 M | 473 M |
-| `20260901.en` | 4,331,110,851 | 1,062 M | 1,017 M |
+## The two ways of asking, and the two halves
 
-Japanese Wikipedia is measured here because it was the first corpus tried and
-the tokenizer comparison below still rests on it.
+| | asks | measures |
+|---|---|---|
+| cloze | 「当別町は」 | whether the fact went in |
+| qa | 「Q: 当別町はどの都道府県にありますか。A:」 with three worked examples | whether it can be reached by being asked |
 
-## The two probes, which measure opposite things
+A rise in cloze with no rise in qa is the expected shape for continued
+pretraining on declarative text. Run 1 moved both, 2.2% to 86.5% and 1.8% to
+56.0%, which the four earlier runs never did.
 
-| | asks about | in the corpus | measures |
-|---|---|---|---|
-| `src/hierarchy_probe.py` | 2,913 states and wards | yes, every one | recall |
-| `src/probe.py` | 1,134 Japanese municipalities | 1 of them | generalisation |
+One municipality in ten is held out of the corpus entirely, chosen by the
+sha256 of its own code, and scored apart. It cannot be recalled, so it is the
+control that says whether a rise is the facts going in or a model that has
+learnt to name a plausible prefecture. `--split` picks a half; the few-shot
+examples are drawn before the split and never from the held-out side, because
+a worked example states its own answer.
 
-The first is the frozen `probe` subset of the same dataset, pinned by the same
-digest, so a score names a dataset revision. Its answers are all stated in the
-training corpus by construction, which is why it is labelled recall and not
-anything stronger.
+The dataset also marks the questions whose subject names its own answer, and
+`--exclude-leaks` drops them. On this set it is 6% of the questions; on the
+place-level set of the OpenStreetMap corpus it was 39%.
 
-The second is the original question and the corpus says almost nothing about
-it. A rise in the first with none in the second is the expected result rather
-than a disappointment, and both are run before and after so that one cannot be
-reported as the other.
+## Floor and ceiling, measured before any training
 
-| model | level | en | ja |
-|---|---|---:|---:|
-| Qwen3.6-35B-A3B | `place-in-ward` | 37.5% | 45.8% |
-| Qwen3.6-35B-A3B | `state-in-country` | 86.7% | 63.3% |
-| Qwen3-0.6B-Base | `place-in-ward` | 10.0% | 22.5% |
-| Qwen3-0.6B-Base | `state-in-country` | 46.7% | 7.5% |
-
-120 questions per level with three worked examples in front of each, asked as
-a completion. Chance is 4.3% and 0.4%. `ward-in-state` is left out of the
-table because both models answer all 16 of its questions and every answer is
-東京都.
-
-`place-in-ward` is the level with room in it: 37.5% at 35B. The language gap
-reverses between the two levels, which is the `name:en` coverage of
-OpenStreetMap seen from the other side.
+| model | form | half | ja | en |
+|---|---|---|---|---|
+| Qwen3-0.6B-Base | cloze | train | 3.0% | |
+| Qwen3-0.6B-Base | cloze | eval | 5.1% | |
+| Qwen3-0.6B-Base | qa | train | 5.5% | 11.0% |
+| Qwen3-0.6B-Base | qa | eval | 5.7% | 15.4% |
+| Qwen3.6-35B-A3B | cloze | train | 69.8% | |
+| Qwen3.6-35B-A3B | qa | train | 74.5% | 77.0% |
 
 The protocol took three attempts and none of the failures were about
 geography. Asked cold, a base model continues the question. Wrapped in the
@@ -100,47 +116,47 @@ it does the same. And a prompt ending in `A: ` with a trailing space loses the
 first token of the answer, so 文京区 comes back as 京区 and every row is
 wrong. All three read as 0%.
 
+## The runs, in order
+
+| corpus | wording | passes | cloze train | what it showed |
+|---|---|---|---|---|
+| tokyo23, all three forms | its own | 30 | fell | four fifths of the budget went on N-Triples IRIs; control loss rose 0.48 |
+| japan, ja admin | its own | 30 | 0.0% | seven tenths of the text says "A and B do not meet", and the model learnt to say it |
+| japan, one rung | its own | 30 | 9.2% | right shape, wrong prefecture. It learnt the sentence and a prior over names |
+| japan, one rung | its own | 100 | 23.3% | more exposure works, and the control loss began to rise |
+| jp-gov, one rung | eight ways | 60 | 86.5% | the facts went in, and qa moved with them |
+
+`tmp/scores/` has the numbers, the run logs and the model card as text.
+
 ## What is here
 
-    tmp/main.ipynb    the whole experiment as one Colab notebook
+    notebooks/        one notebook per model, named after the model it made
+    src/phrasings.py  the eight ways a fact is said, and the address join
     src/corpus.py     a published dataset -> one flat array of token ids
     src/train.py      continued pretraining, with a control corpus
-    src/probe.py      which prefecture is this municipality in
     src/hierarchy_probe.py       which parent does this place have
-    scripts/build_probe_set.py   rebuilds the answer key from the gazetteer
+    src/probe.py      the older generalisation probe, from a Wikidata key
+    src/budget.py     what the VRAM goes on, before renting any
+    tools/mk_notebook.py         generates a notebook from the sources here
+    tools/battery.py             what a trained model can and cannot do
+    tools/ceiling_cloze.py       the same questions to a served model
+    scripts/build_probe_set.py   rebuilds the older answer key
     scripts/dry_run.sh           every stage, small enough to finish here
 
 ## On Colab
 
-`tmp/main.ipynb` runs top to bottom on an A100 and needs nothing from disk:
-the corpus, the control and the probe all come from the Hub. It is a flattened
-copy of `src/corpus.py`, `src/train.py` and `src/hierarchy_probe.py`, with
-`LIMIT` and `MAX_STEPS` for a smoke run first.
+`notebooks/qwen3-0.6b-base-jp-gov-v0.1.ipynb` runs top to bottom on an A100
+and needs nothing from disk: the corpus, the control and the probe all come
+from the Hub. It is a flattened copy of `src/`, so it needs no checkout, and
+`LIMIT` and `MAX_STEPS` make a smoke run first.
 
-It trains on the Japanese sentences of
-[`yuiseki/geo-triples-japan`](https://huggingface.co/datasets/yuiseki/geo-triples-japan),
-1,848,010 of them, and the defaults come from a run that failed. Training on
-all three forms put four fifths of the budget into N-Triples IRIs: Japanese
-`place-in-ward` fell from 22.5% to 11.7%, the control loss rose by 0.48, and
-every answer collapsed onto one ward, with invented wards like 西武区 among
-them. So the notebook takes one form and a third of the learning rate, and
-`REPLAY` is there for the second run if the control still rises.
+Sixty passes over 172,000 tokens took 24 minutes, and the probes around it
+took longer than the training did. Well under a compute unit.
 
-It continues `Qwen/Qwen3-0.6B-Base` rather than gemma. `google/gemma-3-270m`
-is a gated repository, and a notebook that needs a licence acceptance and a
-token does not run as it stands. The tokenizers also disagree about this
-corpus in Qwen's favour, because four fifths of it is N-Triples:
+A notebook in `notebooks/` is a record of a run that happened, so a change
+meant for the next run writes the next file rather than overwriting the last:
 
-| | N-Triples | ja | en |
-|---|---:|---:|---:|
-| gemma-3-270m | 2.23 | 1.66 | 4.71 |
-| Qwen3-0.6B | 2.71 | 1.39 | 4.25 |
-
-characters per token. 31 million tokens rather than 39 for the same text,
-against a model twice the size: about half an hour of A100 time for one pass,
-3 to 4 compute units. The generalisation probe is the one thing it
-cannot do by itself, because its answer key is `data/jp_municipalities.json`
-here rather than on the Hub; the last cell takes it as an upload.
+    python3 tools/mk_notebook.py notebooks/qwen3-0.6b-base-jp-gov-v0.2.ipynb
 
 ## Run it here before renting anything
 
@@ -152,14 +168,14 @@ and it costs no compute units.
 
 ## Two things the dry run found
 
-**The loss sat at chance.** 11.94 against `ln(262144) = 12.48`, on a pretrained
+The loss sat at chance: 11.94 against `ln(262144) = 12.48`, on a pretrained
 model reading its own language, because `model(input_ids=x, labels=y)` was
 given a window already shifted by one and Transformers shifts labels itself.
 The run completed and the loss came down from 11.94 to 8.11, which looks like
 learning. `train.py` now refuses to start when the first loss is near chance,
 because reporting it was not enough.
 
-**Both corpora improved together.** Held-out Japanese fell 7.44 to 5.29 and the
+Both corpora improved together. Held-out Japanese fell 7.44 to 5.29 and the
 English control fell 6.40 to 4.76, from 1,280 tokens of training. Nothing
 learns geography from 1,280 tokens. What moved is the model's register: an
 instruction-tuned model asked to continue raw text is out of its own
@@ -177,6 +193,10 @@ through. The control corpus is in the loop so that this is visible at every
 checkpoint rather than at the end.
 
 ## What the memory goes on
+
+This section is about gemma-3-270m, which is where the numbers were
+measured. Qwen3-0.6B at 4 x 512 with gradient checkpointing peaked at 5.57 GB
+in the run that produced the published model.
 
 Not the model. gemma-3-270m has 262,144 vocabulary entries against a hidden
 size of 640, so the embedding is 62.6% of its parameters and the loss is
@@ -213,28 +233,28 @@ in `eval()` with them built, so evaluation has its own `--eval-batch-size`,
 defaulting to 1. Without that a training batch the fusion makes affordable
 fails at the first checkpoint.
 
-## Compute
-
-Google AI Pro includes 200 Colab compute units a month; an A100 40GB draws
-about 5.37 an hour, so roughly 37 hours. At 6ND and 40-80 TFLOPS effective:
-
-| model | corpus | hours |
-|---|---|---|
-| 270M | ja, 311 M tokens | 1.7-3.5 |
-| 270M | ja+en, 1,373 M tokens | 7.7-15 |
-| 1.5B | ja, 473 M tokens | 10-15 |
-
-Measured here for comparison: 3,399 tokens/s on one RTX 3060 sharing the card
-with a resident llama-server, which is 25 hours for one pass over the Japanese
-subset. This machine is for the dry run and for short ablations.
-
-Background execution is an Ultra benefit, so a Pro run holds a browser tab
-open and the idle threshold is unpublished. Two or three hours is a reasonable
-bet; fifteen is not.
-
 ## On OSAID
 
 The Open Source AI Definition wants training data a skilled person could
 recreate. A model continued from a base whose corpus is undisclosed inherits
 that, so these runs are instruments for answering a question, not steps toward
 the model itself. Worth restating whenever a result here looks like a product.
+
+## Compute
+
+Google AI Pro includes 200 Colab compute units a month and an A100 40GB draws
+about 5.37 an hour, so roughly 37 hours. At this size that is not the
+constraint: run 1 was 24 minutes of training and rather more of probing, well
+under one unit. The constraint is the browser tab, since background execution
+is an Ultra benefit and the idle threshold is unpublished. Two or three hours
+is a reasonable bet; fifteen is not.
+
+For comparison, this machine gets 3,399 tokens/s on one RTX 3060 sharing the
+card with a resident llama-server. It is for the dry run and for short
+ablations.
+
+## Licence
+
+MIT for the code. See LICENSE, and ATTRIBUTION.md for what the runs read and
+under what terms: the facts are CC BY 4.0, the earlier corpora are ODbL, and
+the control corpus is Wikipedia.

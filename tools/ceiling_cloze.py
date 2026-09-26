@@ -9,7 +9,18 @@ import json, random, sys, collections
 import httpx
 from datasets import load_dataset
 
-URL = "http://10.108.45.102:8080/v1/completions"
+# The endpoint and the name it serves, because neither is guessable. Any
+# OpenAI-compatible completion endpoint will do; this was measured against a
+# llama.cpp server on a local network.
+#
+#     python3 tools/ceiling_cloze.py out.json http://localhost:8080 my-model
+if len(sys.argv) != 4:
+    raise SystemExit("usage: ceiling_cloze.py OUT.json URL MODEL\n"
+                     "  URL   an OpenAI-compatible endpoint, for instance "
+                     "http://localhost:8080\n"
+                     "  MODEL the name that endpoint serves; ask it with "
+                     "curl $URL/v1/models")
+OUT, URL, MODEL = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
 N = 400
 
 
@@ -31,7 +42,8 @@ with httpx.Client(timeout=120.0) as c:
         hits, wrong = 0, []
         for i, r in enumerate(group):
             try:
-                got = c.post(URL, json={"model": "gvt-llm", "temperature": 0,
+                got = c.post(f"{URL}/v1/completions",
+                             json={"model": MODEL, "temperature": 0,
                                         "max_tokens": 16,
                                         "prompt": r["child_ja"] + "は"}
                              ).json()["choices"][0]["text"]
@@ -48,4 +60,4 @@ with httpx.Client(timeout=120.0) as c:
                                  "accuracy": hits / len(group), "wrong": wrong}
         print(f"35B cloze {label}  {hits}/{len(group)}  {hits / len(group):.1%}",
               flush=True)
-json.dump(out, open(sys.argv[1], "w"), ensure_ascii=False, indent=2)
+json.dump(out, open(OUT, "w"), ensure_ascii=False, indent=2)
