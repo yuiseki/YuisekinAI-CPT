@@ -12,6 +12,12 @@ runs/
 checkpoints/
 *.safetensors
 
-# Local copies of published model directories. The weights are on the Hub and
-# the card, the scores and the run log are kept in tmp/scores/ as text.
-tmp/qwen3-*/
+# Local copies of model directories, published or not. The weights that are
+# published live on the Hub; the ones that are not are kept here because a
+# measurement still needs them, and neither belongs in git. The card, the
+# scores and the run log are kept in tmp/scores/ as text.
+#
+# Written as a rule about every model directory rather than about the models
+# there are today: the first version of this named qwen3 only, and the weights
+# from the next run were one `git add -A` from the index.
+tmp/*-jp-gov-*/
