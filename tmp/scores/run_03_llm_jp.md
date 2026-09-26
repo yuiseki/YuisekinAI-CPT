@@ -18,16 +18,30 @@ of training. The probe cost more than the run: 11m07s before and 5m20s after.
     held-out loss   4.8245 -> 2.5815, lowest 1.3916 at step 300
     control loss    2.8477 -> 3.9062   (+1.0585)
 
-## The run damaged the model, and the damage is not subtle
+## What fell was a capability, not the knowledge
 
 The control corpus loss rose by 1.0585. Run 1 rose by 0.1556 and run 2 by
 0.2474 on the same setting of REPLAY. Four to seven times the forgetting,
 because this model had Japanese to lose and Qwen did not.
 
-qa fell by 76 points. The model that answered nine questions in ten before
-training answers fewer than two in ten after it. Whatever else this run shows,
-the weights it produced are worse at the task than the weights it started
-from, measured the way anyone would actually use them.
+qa fell by 76 points, and it is worth being exact about what that is.
+
+It is not the facts. On the held-out half, the same 158 place names score
+11.4% asked as a question and 61.4% asked as a sentence to complete. One
+retrieval path was lost while another was gained; the knowledge behind both is
+the same knowledge, and it is still there.
+
+It is not instruction tuning either. `llm-jp/llm-jp-3-440m` is a base model;
+the instruction-tuned checkpoints are `-instruct2` and `-instruct3`, and
+neither was used. What the qa condition measures on a base model is few-shot
+pattern following: three worked examples of a question and its answer, and the
+model continues the pattern. That capability is emergent from pretraining, and
+3,117 steps of declarative sentences in a single form flattened it.
+
+So the honest statement is narrower than "the run damaged the model". The run
+traded one retrieval path for another and charged 1.0585 of general Japanese
+for the trade. Whether that is a bad bargain depends on which path is wanted,
+and for anything conversational it plainly is.
 
 The held-out loss reached its minimum at step 300, about six epochs, and then
 climbed for the remaining 2,817 steps from 1.3916 to 2.5815. Sixty epochs is
