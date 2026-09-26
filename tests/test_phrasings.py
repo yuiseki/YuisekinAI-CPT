@@ -183,3 +183,24 @@ def test_the_schedule_does_not_follow_the_tokenizer_being_trained():
     assert "SCHEDULE   =" in source, "the schedule has no tokenizer of its own"
     assert "repeats(len(tok(" not in source, \
         "the schedule is counting with the tokenizer being trained"
+
+
+def test_rebindable_settings_keep_their_comments_above_them():
+    """A setting the generator rewrites must not carry a running comment.
+
+    MODEL, SCHEDULE and EPOCHS are replaced line by line when a notebook is
+    generated. EPOCHS once had a comment that continued over four more lines,
+    and rewriting the assignment left those four behind: valid Python, and
+    unreadable. The generator now refuses that, and this is the same rule
+    stated where a reader of the configuration will meet it.
+    """
+    source = open(os.path.join(os.path.dirname(__file__), "..",
+                               "tools", "mk_notebook.py"), encoding="utf-8").read()
+    lines = source.split("\n")
+    for name in ("MODEL     ", "SCHEDULE   ", "EPOCHS      "):
+        where = [i for i, l in enumerate(lines) if l.startswith(name)]
+        assert where, f"{name.strip()} is not in the generator any more"
+        for i in where:
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            assert not (nxt.startswith(" ") and nxt.strip().startswith("#")), \
+                f"{name.strip()} has a comment continuing on the next line"

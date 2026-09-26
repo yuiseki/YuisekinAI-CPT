@@ -9,9 +9,11 @@ _ap.add_argument("out", nargs="?")
 _ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
 _ap.add_argument("--schedule", default="Qwen/Qwen3-0.6B-Base",
                  help='"none" writes every fact exactly once')
+_ap.add_argument("--epochs", type=float, default=60.0)
 ARGS = _ap.parse_args()
 MODEL_ID = ARGS.model
 SCHEDULE_ID = None if ARGS.schedule.lower() == "none" else ARGS.schedule
+EPOCHS_N = ARGS.epochs
 
 def md(*lines):
     return {"cell_type": "markdown", "metadata": {}, "source": list(lines)}
@@ -234,23 +236,21 @@ BATCH       = 4
 GRAD_ACCUM  = 1
 LR          = 1e-4        # this corpus is a hundred thousand tokens or two,
                           # not thirty million
-EPOCHS      = 60.0        # unchanged since run 1, so a fact is read the same
-                          # number of times in every run and the step count
-                          # follows from the corpus rather than the other way
-                          # round.
-                          #
-                          # Epochs rather than steps is also what makes a run
-                          # with a different tokenizer comparable. The corpus
-                          # is written as text and segmented by whichever
-                          # tokenizer is being trained, so the same sentences
-                          # are a different number of tokens: 271,472 under
-                          # Qwen and 251,258 under llm-jp. Holding epochs
-                          # holds how often each fact is read and lets the
-                          # step count differ; holding steps would hold the
-                          # number of updates and let the reading differ.
-                          # Neither is free of a confound, and the first one
-                          # is the one this is asking about. Report the step
-                          # count as a result, not as a nuisance.
+# How many times each fact is read. Sixty was right for a model that did not
+# have these facts; run 3 put the same schedule on one that did, and its
+# held-out loss bottomed at step 300 of 3,117, about six epochs, then climbed
+# back past where it started. A model with something to lose needs a different
+# number from a model with nothing.
+#
+# Epochs rather than steps is also what makes a run with a different tokenizer
+# comparable. The corpus is written as text and segmented by whichever
+# tokenizer is being trained, so the same sentences are a different number of
+# tokens: 172,304 under Qwen and 106,948 under llm-jp. Holding epochs holds how
+# often each fact is read and lets the step count differ; holding steps would
+# hold the number of updates and let the reading differ. Neither is free of a
+# confound, and the first one is the one this is asking about. Report the step
+# count as a result, not as a nuisance.
+EPOCHS      = 60.0
 EVAL_EVERY  = 100
 EVAL_ITERS  = 20
 EVAL_BATCH  = 1           # eval builds the logits; training with liger does not
@@ -1002,6 +1002,16 @@ def rebind(name, value):
     for cell in cells:
         for i, line in enumerate(cell["source"]):
             if line.startswith(name):
+                # A line whose comment runs on to the next one cannot be
+                # replaced without orphaning the rest of it. This happened
+                # once: EPOCHS lost its first comment line and kept four
+                # dangling continuations, which Python accepts and nobody can
+                # read. Put the comment above the assignment instead.
+                rest = cell["source"][i + 1] if i + 1 < len(cell["source"]) else ""
+                if rest.strip().startswith("#") and rest.startswith(" "):
+                    raise SystemExit(
+                        f"{name.strip()} carries a comment that continues on "
+                        "the next line; move it above the assignment")
                 keep = line[len(line.rstrip("\n")):]
                 cell["source"][i] = f"{name}= {value!r}{keep}"
                 return
@@ -1012,6 +1022,54 @@ def rebind(name, value):
 # the model, because the reason to run a notebook is rarely the same twice and
 # a notebook that does not say why it exists is hard to read a month later.
 RUN_NOTES = {
+    ("llm-jp/llm-jp-3-440m", 6.0): r"""
+## Why this run exists
+
+Run 3 is this notebook with `EPOCHS` at 60, and it overshot. Everything else
+is the same: the same corpus, every fact written once, the same learning rate,
+the same replay. One number changed, and it was chosen from run 3's own
+measurement rather than guessed.
+
+Run 3 went like this.
+
+    cloze train no-leak    26.0% -> 97.5%
+    cloze eval  no-leak    29.1% -> 61.4%
+    qa    train no-leak    91.5% -> 19.8%
+    qa    eval  no-leak    90.5% -> 11.4%
+    control loss          2.8477 -> 3.9062
+    held-out loss         lowest 1.3916 at step 300 of 3,117, ended 2.5815
+
+Two things in that are worth having and one is not.
+
+Worth having: the held-out half rose by 32 points although none of those place
+names is written anywhere in the corpus. This model knew the facts before the
+run, answering 91% when asked as a question, and could not state them in the
+corpus's sentence form. It learnt the form, and a form carries to every fact
+already held. That is what continued pretraining did here, and it is not what
+it did to Qwen, whose held-out half moved 1.3 points.
+
+Not worth having: qa fell by 71 points and the control loss rose by 1.0585,
+against 0.1556 in run 1. The facts are still there, since the same held-out
+places score 11.4% asked and 61.4% completed, so what closed is a way in
+rather than the knowledge. It is few-shot pattern following, which this model
+has from pretraining alone and which 3,117 steps of one sentence shape
+flattened. Base model, note: the instruction-tuned llm-jp checkpoints are
+separate repositories and neither was used.
+
+The held-out loss says where to stop: step 300, about six epochs.
+
+## What to watch
+
+Whether the 61.4% survives. If the format transfer needed sixty epochs then
+this run will not show it, and the trade was real rather than an overshoot.
+
+Whether qa comes back. If a shorter run keeps both, the recipe was simply too
+long for a model that already knew the answers, and nothing more subtle is
+going on. If qa still collapses at six epochs, the next run lowers the
+learning rate, and that is the point at which the trade looks structural.
+
+The control loss, which at 0.1 is ordinary and at 1.0 is not.
+""",
     "llm-jp/llm-jp-3-440m": r"""
 ## Why this run exists
 
@@ -1075,12 +1133,16 @@ result and not a rounding error. Watch both, and watch the control loss.
 """,
 }
 
-note = RUN_NOTES.get(MODEL_ID)
+# Keyed on the model and, where a run turns on one setting, on that setting
+# too: two runs of the same model at different epochs are different
+# experiments and should not carry the same note.
+note = RUN_NOTES.get((MODEL_ID, EPOCHS_N)) or RUN_NOTES.get(MODEL_ID)
 if note:
     cells.insert(1, md(*src(note)))
 
 rebind("MODEL     ", MODEL_ID)
 rebind("SCHEDULE   ", SCHEDULE_ID)
+rebind("EPOCHS      ", EPOCHS_N)
 
 nb = {"cells": cells,
       "metadata": {"accelerator": "GPU",
