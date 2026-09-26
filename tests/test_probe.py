@@ -57,3 +57,42 @@ def test_the_answer_key_holds_municipalities_and_not_neighbourhoods():
     assert "Q11653218" not in {r["qid"] for r in rows}
     names = [r["ja"] for r in rows]
     assert len(names) == len(set(names)), "a name with two answers is in the set"
+
+
+def test_the_two_halves_of_the_split_are_scored_apart(tmp_path):
+    """Averaging a recall score with a generalisation one.
+
+    A held-out municipality is not in the training corpus in any position, so
+    what it scores is what its name alone gives. A trained one is being
+    recalled. One number over both rises when either does and identifies
+    neither, which is the whole reason the dataset carries the column.
+    """
+    import json
+    import hierarchy_probe
+
+    rows = [{"level": "municipality-in-prefecture",
+             "child_id": f"abr-muni-{i:06d}",
+             "child_ja": f"第{i}市", "child_en": f"City {i}",
+             "parent_id": f"abr-pref-{i % 7:02d}",
+             "parent_ja": f"第{i % 7}県", "parent_en": f"Pref {i % 7}",
+             "split": "eval" if i % 10 == 0 else "train"}
+            for i in range(60)]
+    path = tmp_path / "probe.json"
+    path.write_text(json.dumps(rows), encoding="utf-8")
+
+    _, whole = hierarchy_probe.load(str(path), 0, "ja")
+    _, train = hierarchy_probe.load(str(path), 0, "ja", split="train")
+    _, held = hierarchy_probe.load(str(path), 0, "ja", split="eval")
+    assert {r["split"] for r in train} == {"train"}
+    assert {r["split"] for r in held} == {"eval"}
+    # The shots come out of the pool once, before the split is applied, so
+    # the two halves add up to the whole exactly.
+    assert len(train) + len(held) == len(whole)
+
+    # And no demonstration is a held-out one. A demonstration states its
+    # answer in the prompt, so one drawn from the eval half would teach the
+    # very fact the half exists to withhold.
+    prefix, _ = hierarchy_probe.load(str(path), 0, "ja", split="eval")
+    for r in rows:
+        if r["split"] == "eval":
+            assert r["child_ja"] not in prefix["municipality-in-prefecture"]

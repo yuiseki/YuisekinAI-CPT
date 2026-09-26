@@ -137,7 +137,7 @@ def read_rows(path, config=DEFAULT_CONFIG, revision=None):
 
 
 def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None,
-         shots=SHOTS, exclude_leaks=False):
+         shots=SHOTS, exclude_leaks=False, split=None):
     """n questions from each level, not n from the whole set.
 
     There are 2,896 state questions and 17 ward questions, so a sample drawn
@@ -166,6 +166,18 @@ def load(path, n, lang, seed=3, config=DEFAULT_CONFIG, revision=None,
         rows = [r for r in rows if not r.get("answer_in_child_" + lang)]
     rows.sort(key=lambda r: (r["level"], r["child_id"]))
     prefixes, rows = few_shot(rows, lang, shots)
+    if split:
+        # After the demonstrations are drawn, not before. The two halves
+        # answer different questions and must not be averaged: a trained
+        # municipality is being recalled, while a held-out one was never in
+        # the corpus in any position, so what it scores is what its name
+        # alone gives. Filtering first would also draw the demonstrations
+        # from whichever half was asked for, so the two runs would differ by
+        # their examples as well as by their questions.
+        rows = [r for r in rows if r.get("split") == split]
+        if not rows:
+            raise SystemExit(f"no rows with split {split}; this set may not "
+                             f"carry a split column")
     by_level = collections.defaultdict(list)
     for r in rows:
         by_level[r["level"]].append(r)
@@ -193,6 +205,11 @@ def few_shot(rows, lang, k=SHOTS):
     every question for the rest of the run.
 
     Removed from the pool, so a demonstration is never also scored.
+
+    Never a held-out feature, where the set says which are. A demonstration
+    states its own answer in the prompt, so demonstrating one would put a
+    held-out fact in front of the model and then score the model on the half
+    that is supposed to be absent from it.
     """
     by_level = collections.defaultdict(list)
     for r in rows:
@@ -206,6 +223,8 @@ def few_shot(rows, lang, k=SHOTS):
         for i in order:
             if len(picked) >= k:
                 break
+            if group[i].get("split") == "eval":
+                continue
             if group[i]["parent_id"] in parents:
                 continue
             parents.add(group[i]["parent_id"])
@@ -347,6 +366,11 @@ def main():
                     help="worked examples before each question. A base model "
                          "asked cold continues the question instead of "
                          "answering it")
+    ap.add_argument("--split", default=None, choices=["train", "eval"],
+                    help="score one half of the dataset's split. Held-out "
+                         "features are absent from the training corpus "
+                         "entirely, so the two halves are not comparable and "
+                         "are not averaged")
     ap.add_argument("--langs", nargs="*", default=["en", "ja"])
     ap.add_argument("--label", default=None)
     ap.add_argument("--out", default=None)
@@ -359,14 +383,15 @@ def main():
     for lang in a.langs:
         shots, rows = load(a.set, a.n, lang, config=a.config,
                            revision=a.revision, shots=a.shots,
-                           exclude_leaks=a.exclude_leaks)
+                           exclude_leaks=a.exclude_leaks, split=a.split)
         print(f"{len(rows)} questions in {lang}, {a.shots} shots each")
         answers = (ask_endpoint(a.url, a.model_name, rows, lang, shots=shots)
                    if a.url
                    else ask_local(a.model, rows, lang, shots=shots,
                                   chat=a.chat, mode=a.mode))
         scores[lang] = report(
-            f"{a.label or a.model or a.model_name}  [{lang} {a.mode}]",
+            f"{a.label or a.model or a.model_name}  "
+            f"[{lang} {a.mode}{' ' + a.split if a.split else ''}]",
             answers, a.mode)
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
