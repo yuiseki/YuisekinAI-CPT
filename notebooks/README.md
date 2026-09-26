@@ -8,6 +8,7 @@ needs nothing but the notebook and the published datasets.
 | notebook | model | corpus |
 |---|---|---|
 | `qwen3-0.6b-base-jp-gov-v0.1.ipynb` | [`yuiseki/qwen3-0.6b-jp-gov-v0.1`](https://huggingface.co/yuiseki/qwen3-0.6b-jp-gov-v0.1) | 1,632 facts from `yuiseki/geo-triples-jp-gov`, said eight ways |
+| `qwen3-0.6b-base-jp-gov-v0.1.1.ipynb` | not run yet | the same, with short names said three times over |
 
 The name is the base model, the data, and the version: the notebook says what
 went in, and the model repository says what came out. The scores of each run

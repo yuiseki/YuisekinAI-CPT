@@ -132,3 +132,33 @@ def check_notebook_phrasings(path):
     body = code[code.index("PHRASE = ["):]
     exec(body[:body.index("\n\n\ndef address")], scope)
     assert scope["PHRASE"] == phrasings.PHRASE, path
+
+
+def test_a_short_name_is_written_more_often():
+    """The whole of what run 1 got wrong, as a rule.
+
+    Two-token names came back wrong 60.3% of the time and six-token ones
+    1.7%. The schedule below is the cheapest thing that follows from that: say
+    the short ones more often. If it ever became flat, a run would silently go
+    back to the distribution that failed.
+    """
+    assert phrasings.repeats(2) == 3
+    assert phrasings.repeats(3) == 2
+    assert phrasings.repeats(4) == 1
+    assert phrasings.repeats(9) == 1
+    # Monotone: never say a longer name more often than a shorter one.
+    counts = [phrasings.repeats(n) for n in range(1, 10)]
+    assert counts == sorted(counts, reverse=True), counts
+
+
+def test_the_schedule_grows_the_corpus_by_about_three_fifths(tmp_path):
+    """A rule that quietly tripled the corpus would change the run's budget.
+
+    The measured distribution of name lengths over the 1,632 facts is 58 of
+    two tokens, 880 of three and 694 longer, which the schedule turns into
+    1.61 times as many sentences. A change that moved this materially would
+    mean the comparison with run 1 is no longer about the distribution alone.
+    """
+    lengths = [2] * 58 + [3] * 880 + [4] * 694
+    grown = sum(phrasings.repeats(n) for n in lengths) / len(lengths)
+    assert 1.55 < grown < 1.70, grown

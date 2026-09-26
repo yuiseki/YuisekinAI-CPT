@@ -199,7 +199,10 @@ BLOCK       = 512
 BATCH       = 4
 GRAD_ACCUM  = 1
 LR          = 1e-4        # this corpus is 172,000 tokens, not 30 million
-EPOCHS      = 60.0        # five thousand steps, a few minutes on an A100
+EPOCHS      = 60.0        # unchanged from run 1, so the facts that were
+                          # already learnt see exactly what they saw then.
+                          # The corpus is 1.6 times longer, so the run is
+                          # 1.6 times longer: about 8,100 steps.
 EVAL_EVERY  = 100
 EVAL_ITERS  = 20
 EVAL_BATCH  = 1           # eval builds the logits; training with liger does not
@@ -381,6 +384,27 @@ def phrasings(fact, n):
     return [t.format(child=fact["child"], parent=fact["parent"],
                      address=fact["address"])
             for t in PHRASE[:n]]
+
+
+# How many times a fact is written, by how many tokens its subject takes.
+#
+# Run 1 got 1.7% of the six-token names wrong and 60.3% of the two-token ones,
+# falling monotonically in between. It is not capacity: 1,632 facts is about
+# 9,000 bits. A short name gives the model one or two places to hang a fact
+# on, and one of them is the 市 or 町 it shares with 800 others.
+#
+# Two other things were measured and are deliberately not used. The frequency
+# of the name's rarest token in Japanese Wikipedia predicts the same failures
+# slightly less well, 131 of the 188 against 153, and would cost a frequency
+# table. The size of the answering prefecture predicts them independently and
+# much more weakly, and evening it out means repeating whole prefectures: 4.6
+# times the corpus rather than 1.6.
+def repeats(name_tokens):
+    if name_tokens <= 2:
+        return 3
+    if name_tokens == 3:
+        return 2
+    return 1
 
 
 CANDIDATES = {"municipality-in-prefecture": 47}
@@ -606,7 +630,9 @@ def build_from_probe(out, dataset, model, n_phrasings, revision=None,
                       "address": address(m["pref"], m["county"], m["name"])})
     texts = []
     for f in facts:
-        texts.extend(phrasings(f, n_phrasings))
+        said = phrasings(f, n_phrasings)
+        texts.extend(said * repeats(len(tok(f["child"],
+                                            add_special_tokens=False)["input_ids"])))
     # Sorted, then shuffled with a fixed seed. Sorting first makes the order
     # independent of how the rows arrived; shuffling stops the eight
     # phrasings of one fact from always landing in the same window.
@@ -627,7 +653,8 @@ def build_from_probe(out, dataset, model, n_phrasings, revision=None,
             np.asarray(buf, dtype=DTYPE).tofile(f)
             total += len(buf)
     print(f"{total:,} tokens from {len(facts):,} facts x {n_phrasings} "
-          f"phrasings -> {out}")
+          f"phrasings, said {len(texts) / (len(facts) * n_phrasings):.2f} "
+          f"times each on average -> {out}")
     for line in texts[:3]:
         print(f"    {line}")
     return total

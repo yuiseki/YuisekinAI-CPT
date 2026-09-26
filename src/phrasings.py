@@ -73,6 +73,34 @@ def phrasings(fact, n):
             for t in PHRASE[:n]]
 
 
+# How many times a fact is written, by how many tokens its subject takes.
+#
+# Run 1 learnt 1.7% of the six-token names wrongly and 60.3% of the two-token
+# ones. The rate falls monotonically in between, and it is not capacity: 1,632
+# facts is about 9,000 bits. A short name gives the model one or two places to
+# hang a fact on, and one of them is the 市 or 町 it shares with 800 others.
+#
+# Two other things were measured and are deliberately not used here. The
+# frequency of the name's rarest token in Japanese Wikipedia predicts the same
+# failures slightly less well (131 of the 188 against 153) and costs a
+# frequency table the builder would have to carry. The size of the answering
+# prefecture predicts them independently and much more weakly, and evening it
+# out would mean repeating whole prefectures, 4.6 times the corpus rather than
+# 1.6.
+def repeats(name_tokens):
+    """How many times to write each phrasing of a fact with this subject.
+
+    Written as a comparison rather than a lookup so that a name shorter than
+    any in this dataset gets the most exposure rather than the least, which a
+    table with no entry for it would have given.
+    """
+    if name_tokens <= 2:
+        return 3
+    if name_tokens == 3:
+        return 2
+    return 1
+
+
 def code_of(child_id):
     """abr-muni-403423 -> 403423, the local government code the register uses."""
     return child_id.rsplit("-", 1)[-1]
