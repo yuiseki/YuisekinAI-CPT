@@ -57,3 +57,15 @@ being independent of it.
 
 None of these is obviously right. What is clear is that the 52% cannot be fed
 in as they stand.
+
+## Postscript: Qwen does not know them either
+
+    model             「X County is in the state of」   three-shot question
+    llm-jp-3-440m                    30.0%                     26.0%
+    Qwen3-0.6B-Base                  17.5%                     27.0%
+
+Chance is 2.0%, and both figures are against an answer key that has no answer
+for half the questions, so read them as a floor rather than as a score. Neither
+model holds this rung. The English-pretrained model is not better at the
+American one, which is worth remembering before assuming a corpus is easy for
+a model because of what language it is in.
