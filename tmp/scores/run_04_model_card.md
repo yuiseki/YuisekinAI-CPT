@@ -22,9 +22,10 @@ llm-jp-3-440m, continued on 1,632 facts about which prefecture each of Japan's
 municipalities is in, each said eight ways. 106,948 tokens, six passes, 41
 seconds on an A100.
 
-The base model already answers 91% of these when asked as a question. What it
-could not do was state them: 「当別町は」 produced a paragraph about the town's
-population. This model completes the sentence, and it does so for the one
+The base model already answers 91% of these when asked as a question, and 86%
+when the sentence names what it wants. What it could not do was answer a bare
+「当別町は」, which invites a paragraph about the town's population rather than
+its prefecture. This model completes that sentence, and it does so for the one
 municipality in ten that was held out of the corpus entirely.
 
 ```python
@@ -47,23 +48,41 @@ Chance is 2.1%: the answer is one of 47 prefectures. The held-out half is one
 municipality in ten, chosen by the sha256 of its own code, and written nowhere
 in the corpus.
 
-| | base | this |
+| asked | base | this |
 |---|---|---|
 | 「当別町は」, taught half | 26.0% | 97.2% |
 | 「当別町は」, held-out half | 29.1% | 71.5% |
+| 「当別町が属する都道府県は」 | 72.5% | 96.5% |
+| 「当別町の位置する都道府県名は」 | 86.0% | 96.5% |
 | 「Q: 当別町は何県にありますか。A:」, taught | 91.5% | 98.0% |
 | 「Q: 当別町は何県にありますか。A:」, held-out | 90.5% | 83.5% |
+| 「Tobetsu-choは」 | 7.0% | 16.0% |
+| 「北海道の市区町村のひとつが」 | 95.7% | 100.0% |
 
-The held-out half rising by 42 points is the result worth explaining. Those
-place names are not in the corpus. The model knew where they were and could
-not say so; what it learnt was the sentence form, and a form carries to every
-fact already held.
+Rows three, four and seven are wordings that appear nowhere in the corpus. Row
+eight asks for the mapping backwards, and all 47 prefectures now get a
+municipality that is really in them.
 
-The question form did not have to be traded away for it. On the taught half it
-improved. On the held-out half it cost 7 points, which is the model moving
-toward the facts it read.
+Two things in this table are worth reading carefully.
+
+The base was never short of the knowledge, and was not even short of a way to
+say it: given a sentence that names what it wants, it manages 86%. What it
+could not do was treat a bare 「Xは」 as that question. Six passes make the bare
+form work and raise the already-working forms into the high nineties.
+
+The held-out half of the bare form rose 42 points, from 29.1% to 71.5%. Those
+place names are written nowhere in the corpus. What transferred is the reading
+of the prompt, not the facts, because the facts were already there.
+
+The question form did not have to be traded away. On the taught half it
+improved. On the held-out half it cost 7 points, the model moving toward what
+it read.
 
 ## What it cannot do
+
+It knows this in Japanese only. The same name in romaji goes from 7.0% to
+16.0%, which is a corpus of Japanese sentences doing nothing for a Latin
+spelling that never appears in it.
 
 It is a 440m base model and it is still one. It has no instruction tuning, it
 is not a chat model, and the register of its Japanese moved toward the corpus:

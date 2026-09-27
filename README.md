@@ -10,7 +10,9 @@ writes `Hiroshima City, Tokyo, Japan`, which is well formed and returns nothing
 from a map query. Does feeding it geographic text fix that, and what does it
 break on the way?
 
-It does, for the facts it is fed.
+It does, for the facts it is fed. And then, on a second base model, the same
+corpus showed that most of what continued pretraining was doing is not what
+the question assumed.
 
 ## What came out of it
 
@@ -35,6 +37,39 @@ model card says it in the same words.
 The 35B answering 69.8% of one half and 72.0% of the other is the control the
 split needed. It was shown neither, so the halves are equally hard, and the
 63.7-point gap in the small model is training rather than difficulty.
+
+[`yuiseki/llm-jp-3-440m-jp-gov-v0.2`](https://huggingface.co/yuiseki/llm-jp-3-440m-jp-gov-v0.2):
+the same corpus on a smaller Japanese base, for six passes and 41 seconds.
+
+| asked | llm-jp-3-440m | after |
+|---|---|---|
+| 「当別町は」, taught half | 26.0% | 97.2% |
+| 「当別町は」, held-out half | 29.1% | 71.5% |
+| 「当別町が属する都道府県は」 | 72.5% | 96.5% |
+| 「Q: 当別町は何県にありますか。A:」, taught | 91.5% | 98.0% |
+| 「Q: 当別町は何県にありますか。A:」, held-out | 90.5% | 83.5% |
+| 「北海道の市区町村のひとつが」 | 95.7% | 100.0% |
+
+Read the second row against the Qwen table's second row. The held-out half
+rises 42 points here and 19 there, on place names written nowhere in the
+corpus. This model already knew where they were, answering 91% when asked as a
+question; what it lacked was a reading of 「Xは」 that treats it as that
+question. Continued pretraining supplied the reading, and a reading carries to
+every fact already held.
+
+Which is the finding, and it was not the question anyone set out with:
+continued pretraining on declarative text teaches a way in more than it teaches
+facts, and how much of each depends on what the model already has. Sweeping the
+base model both ways before training says which it will be. For llm-jp on this
+corpus, 116 of 1,525 facts were absent in both forms; the other 93% of the work
+was phrasing.
+
+That ratio sets the epoch count. Sixty passes, which was right for Qwen, took
+llm-jp's question form from 91.5% to 19.8%: it stopped applying its three
+worked examples and started repeating the nearest one, while emitting a clean
+single prefecture every time and so looking fine. Six passes cost nothing and
+gave more. On the 116 genuinely new facts, though, sixty beat six, p = 0.033.
+Facts want passes; phrasings do not.
 
 ## The corpus
 
@@ -125,8 +160,14 @@ wrong. All three read as 0%.
 | japan, one rung | its own | 30 | 9.2% | right shape, wrong prefecture. It learnt the sentence and a prior over names |
 | japan, one rung | its own | 100 | 23.3% | more exposure works, and the control loss began to rise |
 | jp-gov, one rung | eight ways | 60 | 86.5% | the facts went in, and qa moved with them |
+| jp-gov, short names 3x | eight ways | 60 | 90.6% | writing short names more often fixes three-token ones and not two-token ones, and the bands it does not touch get worse |
+| jp-gov, llm-jp base | eight ways | 60 | 97.5% | on a model that already knew, sixty passes cost the question form and 1.06 of control loss |
+| jp-gov, llm-jp base | eight ways | 6 | 97.2% | the same in 41 seconds, with the question form improved and the held-out half 10 points higher |
 
-`tmp/scores/` has the numbers, the run logs and the model card as text.
+`tmp/scores/RUNS.md` says which weights each run produced and which are
+published. `tmp/scores/` has the numbers, the run logs and the model cards as
+text; `tmp/scores/tokenizer_question.md` is what the four runs together say
+about why short names were hard on Qwen and are not on llm-jp.
 
 ## What is here
 
