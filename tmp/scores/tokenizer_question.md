@@ -59,8 +59,29 @@ learnt as readily as long ones.
 That removes the confound that llm-jp already knew how to say these things. It
 does not remove the one underneath: being unable to state a fact is not being
 without it. Most of the 1,100 are facts the model held and could not phrase.
-The facts it had in neither form are a much smaller set, and the sweep that
-identifies them is running.
+
+So the untrained model was asked all 1,525 both ways.
+
+              qa ok   qa no
+    cloze ok    441       2
+    cloze no    966     116
+
+116 facts it had in neither form. Those are the ones continued pretraining had
+to supply as knowledge rather than as phrasing, and they band like this after
+run 4:
+
+    name tokens     n    wrong
+              1     2     0.0%
+              2    89    14.6%
+              3    24     8.3%
+              4     1     0.0%
+
+Two tokens or fewer against three or more is 13 of 91 against 2 of 25, Fisher
+p = 0.52. There is no length effect to find. The same test on run 1's Qwen
+bands, 35 of 58 against 153 of 1,574, gives p = 6e-20.
+
+That is as far as this can be taken. The set is small and a weak effect could
+hide in it, but an effect the size of Qwen's could not.
 
 ## Short names are harder for llm-jp too, before any training
 
@@ -73,6 +94,23 @@ identifies them is running.
 
 Same direction as Qwen and far gentler, 21.6% against 54.8% rather than 60.3%
 against 2.8%. Six epochs removes it. Sixty epochs did not remove Qwen's.
+
+## Facts and phrasings want different numbers of epochs
+
+On those same 116 facts, run 3 at sixty epochs beats run 4 at six: 5 wrong
+against 15, p = 0.033. Everywhere else run 4 wins, and by a great deal.
+
+The two are not in conflict. A fact the model does not have needs to be written
+into it, and that takes passes. A fact it has and cannot phrase needs only the
+phrasing, and that is learnt almost at once and then overwritten by more of the
+same. Run 3 spent sixty epochs on a corpus that was 93% phrasing work and 7%
+knowledge work, and the 93% is what paid for the damage.
+
+Which means the epoch count is not a property of the corpus. It is a property
+of the overlap between the corpus and the model, and that overlap is
+measurable before training: sweep the base model both ways and count the facts
+it has in neither form. A corpus that is mostly new to the model wants many
+passes; one that is mostly new phrasings of what it knows wants few.
 
 ## Where that leaves the hypothesis
 
