@@ -81,15 +81,19 @@ def main():
             for name, want, c, q in examples[key][:8]:
                 print(f"    {name:10} {want:5} | cloze {c!r:26} qa {q!r}")
 
+    # Named after the model as well as the split. The first version named the
+    # split alone, and running it on a second set of weights would have
+    # overwritten the first set's answers with no warning.
+    out_path = (f"tmp/scores/paths_{model_name.rstrip('/').split('/')[-1]}"
+                f"_{split}.json")
     json.dump({"model": model_name, "split": split,
                "cells": {f"{k[0]}|{k[1]}": v for k, v in cell.items()},
                "rows": [{"child": r["child_ja"], "want": r["parent_ja"],
                          "cloze": c, "qa": q}
                         for (r, _a, c), (_b, _c, q)
                         in zip(got["cloze"], got["qa"])]},
-              open(f"tmp/scores/paths_{split}.json", "w"),
-              ensure_ascii=False, indent=1)
-    print(f"\nwrote tmp/scores/paths_{split}.json")
+              open(out_path, "w"), ensure_ascii=False, indent=1)
+    print(f"\nwrote {out_path}")
 
 
 if __name__ == "__main__":
