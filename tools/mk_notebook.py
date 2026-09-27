@@ -10,10 +10,15 @@ _ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
 _ap.add_argument("--schedule", default="Qwen/Qwen3-0.6B-Base",
                  help='"none" writes every fact exactly once')
 _ap.add_argument("--epochs", type=float, default=60.0)
+_ap.add_argument("--probe-at", default="",
+                 help="comma-separated epoch counts to stop and score at")
+_ap.add_argument("--schedule-shape", default="cosine", choices=["cosine", "flat"])
 ARGS = _ap.parse_args()
 MODEL_ID = ARGS.model
 SCHEDULE_ID = None if ARGS.schedule.lower() == "none" else ARGS.schedule
 EPOCHS_N = ARGS.epochs
+PROBE_AT_LIST = [float(x) for x in ARGS.probe_at.split(",") if x.strip()]
+SHAPE = ARGS.schedule_shape
 
 def md(*lines):
     return {"cell_type": "markdown", "metadata": {}, "source": list(lines)}
@@ -251,6 +256,32 @@ LR          = 1e-4        # this corpus is a hundred thousand tokens or two,
 # confound, and the first one is the one this is asking about. Report the step
 # count as a result, not as a nuisance.
 EPOCHS      = 60.0
+# Epoch counts at which to stop and score, inside one run, so that choosing an
+# epoch count does not cost a run each. Empty means score only at the end.
+#
+# Read this against SCHEDULE_SHAPE below. Under a cosine schedule the model at
+# epoch 6 of a 60-epoch run is not the model a 6-epoch run produces: it has
+# seen the same tokens but at a learning rate that has barely come down, and
+# the 6-epoch run ends with the rate at zero. Cosine answers "when was this run
+# best", which is worth knowing. To answer "what epoch count should the next
+# run use", hold the rate flat.
+PROBE_AT    = []
+PROBE_AT_N  = 100         # questions per condition at an intermediate stop,
+                          # smaller than PROBE_N because there are several
+
+# And which conditions. All eight at sixty stops would cost longer than any
+# Colab session: the full probe takes about seven minutes on an A100, so sixty
+# of them is seven hours. These four are the ones an epoch curve is read from,
+# and each is the version that excludes questions naming their own answer.
+PROBE_AT_CONDITIONS = ["cloze train no-leak", "cloze eval no-leak",
+                       "qa train no-leak", "qa eval no-leak"]
+
+# "cosine" warms up and decays to zero over the whole run, which is the shape
+# runs 1 to 4 used. "flat" warms up and then holds, which makes a stop at step
+# k comparable to a run of k steps and makes PROBE_AT mean what it looks like
+# it means.
+SCHEDULE_SHAPE = "cosine"
+
 EVAL_EVERY  = 100
 EVAL_ITERS  = 20
 EVAL_BATCH  = 1           # eval builds the logits; training with liger does not
@@ -309,10 +340,10 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, \
-    get_cosine_schedule_with_warmup
+    get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
 
-DTYPE = np.uint32   # 151,669 vocabulary entries for Qwen, 262,144 for gemma;
-                    # neither fits in 16 bits
+DTYPE = np.uint32   # 151,669 vocabulary entries for Qwen, 99,574 for llm-jp,
+                    # 262,144 for gemma; none of them fits in 16 bits
 
 
 def build_corpus(out, dataset, config, model, where=None, limit=0,
@@ -788,18 +819,29 @@ CONDITIONS = [(mode, leaks, split)
               for split in ("train", "eval")]
 
 
-def run_probe(model, tok, label):
+def run_probe(model, tok, label, only=None, quiet=False):
     out = {}
     for mode, leaks, split in CONDITIONS:
+        tag = f"{mode} {split}" + ("" if leaks else " no-leak")
+        if only is not None and tag not in only:
+            continue
         shots, rows = probe_rows(PROBE_N, "ja", revision=REVISION,
                                  exclude_leaks=not leaks, split=split)
         if not rows:
             continue
-        tag = f"{mode} {split}" + ("" if leaks else " no-leak")
-        print(f"{len(rows)} questions, {tag}")
-        out[tag] = score(f"{label} [{tag}]",
-                         ask(model, tok, shots, rows, "ja", device, mode=mode),
-                         mode)
+        if not quiet:
+            print(f"{len(rows)} questions, {tag}")
+        answers = ask(model, tok, shots, rows, "ja", device, mode=mode)
+        if quiet:
+            # An epoch curve is sixty rows of four numbers. Printing the whole
+            # report sixty times buries it.
+            hits = sum(correct(a, r["parent_ja"], mode) for r, _l, a in answers)
+            out[tag] = {"municipality-in-prefecture": {
+                "correct": hits, "n": len(rows),
+                "accuracy": hits / len(rows),
+                "chance": 1 / CANDIDATES["municipality-in-prefecture"]}}
+        else:
+            out[tag] = score(f"{label} [{tag}]", answers, mode)
     return out
 
 
@@ -835,12 +877,54 @@ model.gradient_checkpointing_enable()
 model.train()
 opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01,
                         betas=(0.9, 0.95))
-sched = get_cosine_schedule_with_warmup(opt, min(100, steps // 10 + 1), steps)
+warmup = min(100, steps // 10 + 1)
+sched = (get_cosine_schedule_with_warmup(opt, warmup, steps)
+         if SCHEDULE_SHAPE == "cosine"
+         else get_constant_schedule_with_warmup(opt, warmup))
+print(f"learning rate: {SCHEDULE_SHAPE}, {warmup} steps of warmup")
+
+# Where to stop and score. An epoch is cut / per_step steps.
+marks = sorted({max(1, min(steps, round(e * cut / per_step))) for e in PROBE_AT})
+if marks:
+    print("scoring at steps " + ", ".join(f"{m:,}" for m in marks)
+          + f" (epochs {', '.join(format(m * per_step / cut, '.3g') for m in marks)})")
+mid = {}
+
+
+def score_here(step):
+    """Probe without disturbing the run.
+
+    Three things have to be put back: the mode, gradient checkpointing, and
+    the cache. Generation needs the cache and gradient checkpointing forbids
+    it, so a probe that forgets to restore them trains the rest of the run
+    with a different memory profile than the part before it.
+    """
+    t0 = time.time()
+    model.gradient_checkpointing_disable()
+    model.config.use_cache = True
+    was = PROBE_N
+    try:
+        globals()["PROBE_N"] = PROBE_AT_N
+        out = run_probe(model, tok, "", only=PROBE_AT_CONDITIONS, quiet=True)
+        epoch = step * per_step / cut
+        print("  epoch " + format(epoch, "5.3g") + "  " + "  ".join(
+            f"{t.replace(' no-leak', '')} "
+            f"{out[t]['municipality-in-prefecture']['accuracy']:.1%}"
+            for t in PROBE_AT_CONDITIONS if t in out), flush=True)
+    finally:
+        globals()["PROBE_N"] = was
+        model.config.use_cache = False
+        model.gradient_checkpointing_enable()
+        model.train()
+        paused[0] += time.time() - t0
+    mid[step] = out
+    return out
 
 os.makedirs(OUT, exist_ok=True)
 log = []
 rng = np.random.default_rng(SEED)
 began = time.time()
+paused = [0.0]   # seconds spent scoring rather than training
 
 
 def checkpoint(step):
@@ -849,7 +933,10 @@ def checkpoint(step):
                                 EVAL_ITERS, device, SEED, EVAL_BATCH),
            "control": evaluate(model, control, replay_cut, len(control),
                                BLOCK, EVAL_ITERS, device, SEED, EVAL_BATCH),
-           "elapsed_s": round(time.time() - began, 1)}
+           # Training time, not wall clock: an intermediate probe can take
+           # longer than the steps around it, and charging it to the loop
+           # would make the model look slower the more often it is scored.
+           "elapsed_s": round(time.time() - began - paused[0], 1)}
     log.append(row)
     print(f"  step {step:>6}  held_out {row['held_out']:.4f}  "
           f"control {row['control']:.4f}", flush=True)
@@ -883,9 +970,13 @@ for step in range(1, steps + 1):
         print(f"  peak VRAM {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
     if step % EVAL_EVERY == 0 or step == steps:
         checkpoint(step)
+    if step in marks and step != steps:
+        score_here(step)
 
 seen = steps * per_step
-TIMES["training"] = time.time() - began
+TIMES["training"] = time.time() - began - paused[0]
+if paused[0]:
+    TIMES["probes during"] = paused[0]
 print(f"{seen:,} tokens in {TIMES['training']:.0f}s")
 with stage("saving"):
     model.save_pretrained(OUT)
@@ -972,6 +1063,25 @@ print(f"  {'control':22} {log[0]['control']:8.4f} {log[-1]['control']:8.4f} "
 best = min(log, key=lambda r: r["held_out"])
 print(f"  held-out was lowest at step {best['step']:,}: {best['held_out']:.4f}")
 
+if mid:
+    print("\n--- scores at each stop"
+          + ("" if SCHEDULE_SHAPE != "cosine" else
+             "   (cosine: a stop is not a shorter run)"))
+    # Only the conditions an intermediate stop measures. The other four are
+    # in the before-and-after table above; putting them here as empty cells
+    # made a table that is half blank and twice as wide as it needs to be.
+    tags = [t for t in PROBE_AT_CONDITIONS if t in after]
+    print("  " + f"{'epoch':>7} " + " ".join(
+        f"{t.replace(' no-leak', ''):>14}" for t in tags))
+    for step in sorted(mid) + [steps]:
+        at = mid.get(step, after)
+        row = " ".join(
+            f"{at[t]['municipality-in-prefecture']['accuracy']:13.1%} "
+            if t in at else f"{'':14}" for t in tags)
+        print(f"  {step * per_step / cut:7.3g} {row}")
+    print(f"  every condition excludes questions that name their own answer;"
+          f" {PROBE_AT_N} questions each, {PROBE_N} on the last row")
+
 print("\n--- time")
 for name, seconds in TIMES.items():
     print(f"  {name:22} {hms(seconds):>10}")
@@ -979,9 +1089,9 @@ print(f"  {'total':22} {hms(sum(TIMES.values())):>10}")
 
 # Per-step cost from the checkpoints rather than from the total, so that the
 # evaluations and the saving do not get charged to the training loop.
-marks = [(r["step"], r["elapsed_s"]) for r in log]
-if len(marks) > 1:
-    per = [(s2 - s1, t2 - t1) for (s1, t1), (s2, t2) in zip(marks, marks[1:])
+stamps = [(r["step"], r["elapsed_s"]) for r in log]
+if len(stamps) > 1:
+    per = [(s2 - s1, t2 - t1) for (s1, t1), (s2, t2) in zip(stamps, stamps[1:])
            if s2 > s1]
     rates = [t / n for n, t in per]
     print(f"  {'per step':22} {sum(rates) / len(rates) * 1000:>7.0f} ms"
@@ -1022,6 +1132,62 @@ def rebind(name, value):
 # the model, because the reason to run a notebook is rarely the same twice and
 # a notebook that does not say why it exists is hard to read a month later.
 RUN_NOTES = {
+    ("llm-jp/llm-jp-3-440m", 60.0, "flat"): r"""
+## Why this run exists
+
+To get the epoch curve in one run instead of one run per point.
+
+Runs 3 and 4 are this notebook at sixty epochs and at six. Six won on every
+axis but one, and the exception mattered: on the 116 facts the base model
+could state in neither form, sixty beat six, 5 wrong against 15, p = 0.033.
+So there is a curve here and two points on it, and the two points disagree
+about which direction is better depending on what is being asked.
+
+This run stops at every epoch from 1 to 60 and scores four conditions at each.
+Nothing else changes.
+
+## What makes a stop mean something
+
+The learning rate is flat after warmup rather than cosine, and that is the
+whole reason this run can answer the question.
+
+Under cosine the rate is scheduled against the total, so the model at epoch 6
+of a sixty-epoch run has seen what a six-epoch run saw but at a rate that has
+barely come down, while a six-epoch run ends with the rate at zero. The two
+are different models and comparing them would be comparing schedules. Flat
+makes a stop at epoch k close to a run of k epochs, so the curve reads as a
+choice of epoch count.
+
+The cost is that this run is not directly comparable to runs 1 to 4, which
+were cosine. It is a different experiment about the same corpus, and the
+number it produces is a recommendation for the next cosine run rather than a
+score to put beside theirs.
+
+## What it costs to measure
+
+A full probe is eight conditions at 400 questions and takes about seven
+minutes on an A100. Sixty of those is seven hours, which no Colab session
+survives, so an intermediate stop asks four conditions at 100 questions and
+prints one line. That is about seventy seconds a stop, seventy minutes over
+sixty stops, against seven minutes of training.
+
+The measurement costing ten times the training is the honest shape of this
+problem and worth seeing written down. A hundred questions carries about six
+points of noise, so read the curve for its shape rather than for any single
+row.
+
+## What to look for
+
+Where cloze on the held-out half peaks. That is the format transfer, it was
+61.4% at sixty epochs and 71.5% at six, and neither run looked for the top.
+
+Where qa on the held-out half starts to fall. Run 3 lost 79 points of it by
+sixty and run 4 lost 7 by six. Somewhere between is where it begins.
+
+Whether the two have the same answer. If the best epoch for one is the worst
+for the other, then run 4 was a compromise rather than a solution, and the
+next thing to try is not an epoch count.
+""",
     ("llm-jp/llm-jp-3-440m", 6.0): r"""
 ## Why this run exists
 
@@ -1136,13 +1302,17 @@ result and not a rounding error. Watch both, and watch the control loss.
 # Keyed on the model and, where a run turns on one setting, on that setting
 # too: two runs of the same model at different epochs are different
 # experiments and should not carry the same note.
-note = RUN_NOTES.get((MODEL_ID, EPOCHS_N)) or RUN_NOTES.get(MODEL_ID)
+note = (RUN_NOTES.get((MODEL_ID, EPOCHS_N, SHAPE))
+        or RUN_NOTES.get((MODEL_ID, EPOCHS_N))
+        or RUN_NOTES.get(MODEL_ID))
 if note:
     cells.insert(1, md(*src(note)))
 
 rebind("MODEL     ", MODEL_ID)
 rebind("SCHEDULE   ", SCHEDULE_ID)
 rebind("EPOCHS      ", EPOCHS_N)
+rebind("PROBE_AT    ", PROBE_AT_LIST)
+rebind("SCHEDULE_SHAPE ", SHAPE)
 
 nb = {"cells": cells,
       "metadata": {"accelerator": "GPU",
