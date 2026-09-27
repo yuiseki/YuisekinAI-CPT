@@ -6,10 +6,14 @@ from datasets import load_dataset
 # works too, as the first argument, which is how a run is measured before it
 # is published.
 #
-#     python3 tools/battery.py                      # the published weights
-#     python3 tools/battery.py tmp/<run> out.json   # a run not yet published
+# The base is an argument too. It was Qwen's name in the source for the first
+# three runs, which was fine until a run started from a different model and
+# the table would have compared it against a base it never came from.
+#
+#     python3 tools/battery.py                              # published weights
+#     python3 tools/battery.py tmp/<run> out.json [base]    # a run not yet published
 TRAINED = sys.argv[1] if len(sys.argv) > 1 else "yuiseki/qwen3-0.6b-jp-gov-v0.1"
-BASE = "Qwen/Qwen3-0.6B-Base"
+BASE = sys.argv[3] if len(sys.argv) > 3 else "Qwen/Qwen3-0.6B-Base"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "battery.json"
 N = 200
 
