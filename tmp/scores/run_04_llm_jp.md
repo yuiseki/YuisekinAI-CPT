@@ -49,3 +49,27 @@ is worth looking at before calling the route healthy: the number of distinct
 answers, and the share equal to a demonstration. That needs the weights.
 
 The band table for this run, for the same reason.
+
+## Postscript: what this run costs on a task that is not this probe
+
+Measured 2026-09-28 on TRIDENT's inner layer, which asks for a six-line block
+after about 1,400 tokens of instructions and retrieved examples. 36 cases.
+
+    model                        labels   area   concern   all correct
+    llm-jp-3-440m base            21/26  12/26     8/26        0/26
+    llm-jp-3-440m-jp-gov-v0.2      0/26   0/26     0/26        0/26
+
+Zero on every column. The model writes 592 characters every time, the first
+line and then newlines, and not one of the 36 replies contains the
+`AreaWithConcern` line the task is about. Its base produces one in 23 of 26.
+
+The control loss rise of 0.4733 is what that looks like from inside this
+notebook, and this notebook calls it a price worth paying. It is worth paying
+for what this notebook measures. The probe asks for one short continuation in
+the shape the corpus uses, and six epochs of short declarative sentences make
+a model very good at short declarative sentences.
+
+A probe shaped like the training corpus cannot see what the training cost.
+Any future run that is going to be used for something should be measured on a
+task that does not look like its corpus, before the weights are called an
+improvement.
