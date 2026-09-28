@@ -84,10 +84,28 @@ It knows this in Japanese only. The same name in romaji goes from 7.0% to
 16.0%, which is a corpus of Japanese sentences doing nothing for a Latin
 spelling that never appears in it.
 
+It cannot write a long structured answer any more, and this is the important
+limitation. Measured on TRIDENT's inner layer, which asks for a six-line block
+after about 1,400 tokens of instructions and worked examples, over 36 cases:
+
+| | llm-jp-3-440m | this |
+|---|---|---|
+| all six labels present | 21/26 | 0/26 |
+| the area line correct | 12/26 | 0/26 |
+| replies containing the line the task is about | 23/26 | 0/36 |
+
+It writes 592 characters every time, the first line and then newlines. Its base
+is not good at that task either, but it has material in it; this has none. Six
+epochs of short declarative sentences make a model that writes short
+declarative sentences and stops.
+
+Use it for what the table above it measures: recovering a prefecture from a
+municipality, in a short completion. Do not put it behind a long prompt.
+
 It is a 440m base model and it is still one. It has no instruction tuning, it
 is not a chat model, and the register of its Japanese moved toward the corpus:
-the loss on held-out Japanese Wikipedia rose by 0.473 during training, which is
-forgetting, and it is larger than it looks against a run of 41 seconds.
+the loss on held-out Japanese Wikipedia rose by 0.473 during training. That
+number is the limitation above, seen from inside the training run.
 
 The facts it gets wrong are few and are not the ones you would predict. Over
 all 1,632, 31 are wrong. Name length does not predict them: 1.0% wrong for
